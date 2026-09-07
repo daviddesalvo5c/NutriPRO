@@ -82,10 +82,15 @@ export const FoodSearchPicker: React.FC<Props> = ({ onPick }) => {
         const res = await fetch(`/api/foods-search?q=${encodeURIComponent(term)}`, {
           signal: controller.signal,
         });
-        const data = await res.json();
+        // Una respuesta de error de la plataforma no es JSON; si se parsea a
+        // ciegas, la excepción tapa el motivo real del fallo.
+        const data = await res.json().catch(() => null);
 
         if (!res.ok) {
-          setError(data?.error || 'No se pudo buscar el alimento.');
+          setError(data?.error || `El servidor respondió con un error (${res.status}).`);
+          setResults([]);
+        } else if (!data) {
+          setError('La respuesta del servidor no se pudo interpretar.');
           setResults([]);
         } else {
           setResults(data.results || []);
