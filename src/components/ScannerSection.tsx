@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { FoodItem, MealType, SubscriptionTier } from '../types';
 import { canUserPerformAiScan, incrementTodayAiScansCount, hasUserProAccess } from '../utils/storage';
+import { downscaleImage } from '../utils/image';
 
 interface ScannerSectionProps {
   onAddFoodToDiary: (item: Omit<FoodItem, 'id'>, mealType: MealType) => void;
@@ -168,12 +169,16 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
     }, 1800);
 
     try {
+      // Se reduce antes de enviar: una foto de móvil supera el límite de cuerpo
+      // de la función y alarga el análisis hasta agotar su tiempo máximo.
+      const compact = await downscaleImage(base64Image);
+
       const response = await fetch('/api/analyze-food', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ image: base64Image }),
+        body: JSON.stringify({ image: compact }),
       });
 
       if (!response.ok) {
