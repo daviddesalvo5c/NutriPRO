@@ -1,0 +1,6 @@
+{
+  "name": "Calculadora Nutricional y Perfil de Usuario",
+  "description": "Calcula BMR y TDEE con fórmulas científicas (Mifflin-St Jeor y Harris-Benedict), define objetivos calóricos y de macronutrientes, y registra tu diario de comidas con barras de progreso adaptativas.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

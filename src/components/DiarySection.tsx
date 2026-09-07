@@ -1,0 +1,664 @@
+import React, { useState } from 'react';
+import { 
+  Plus, 
+  Flame, 
+  Trash2, 
+  ChevronLeft, 
+  ChevronRight, 
+  Calendar as CalendarIcon, 
+  Utensils, 
+  Coffee, 
+  Sun, 
+  Moon, 
+  Apple, 
+  Edit3,
+  Sparkles,
+  CheckCircle,
+  AlertCircle,
+  Scan,
+  Camera,
+  Lock
+} from 'lucide-react';
+import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
+import { getProfileCalculations } from '../utils/nutritionCalculations';
+import { WaterTrackerCard } from './WaterTrackerCard';
+import { hasUserProAccess } from '../utils/storage';
+
+interface DiarySectionProps {
+  profile: UserProfile;
+  dailyLogs: Record<string, DailyLog>;
+  selectedDate: string;
+  onSelectDate: (date: string) => void;
+  onAddFoodItem: (date: string, item: Omit<FoodItem, 'id'>) => void;
+  onRemoveFoodItem: (date: string, itemId: string) => void;
+  onUpdateWater?: (date: string, amountMl: number) => void;
+  onOpenProfile: () => void;
+  onNavigateToScanner: () => void;
+  userEmail?: string;
+  currentTier?: SubscriptionTier;
+  onOpenPlansModal?: () => void;
+}
+
+export const DiarySection: React.FC<DiarySectionProps> = ({
+  profile,
+  dailyLogs,
+  selectedDate,
+  onSelectDate,
+  onAddFoodItem,
+  onRemoveFoodItem,
+  onUpdateWater,
+  onOpenProfile,
+  onNavigateToScanner,
+  userEmail = '',
+  currentTier = 'free' as SubscriptionTier,
+  onOpenPlansModal,
+}) => {
+  const [activeModalMeal, setActiveModalMeal] = useState<MealType | null>(null);
+
+  // Check 7-day history limit for Free users
+  const isDateOlderThan7Days = (dateStr: string) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(dateStr);
+    target.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((today.getTime() - target.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays > 6;
+  };
+
+  const isHistoryLocked = !hasUserProAccess(userEmail, currentTier) && isDateOlderThan7Days(selectedDate);
+
+  // Quick add form state
+  const [foodName, setFoodName] = useState('');
+  const [portion, setPortion] = useState('1 porción');
+  const [calories, setCalories] = useState<number | ''>('');
+  const [protein, setProtein] = useState<number | ''>('');
+  const [carbs, setCarbs] = useState<number | ''>('');
+  const [fat, setFat] = useState<number | ''>('');
+
+  // Calculations from the UserProfile
+  const profileCalcs = getProfileCalculations(profile);
+
+  // Active day's items
+  const currentLog = dailyLogs[selectedDate] || { date: selectedDate, items: [] };
+  const items = currentLog.items || [];
+
+  // Sum consumed
+  const totalCaloriesConsumed = items.reduce((acc, i) => acc + (i.calories || 0), 0);
+  const totalProteinConsumed = items.reduce((acc, i) => acc + (i.proteinGrams || 0), 0);
+  const totalCarbsConsumed = items.reduce((acc, i) => acc + (i.carbsGrams || 0), 0);
+  const totalFatConsumed = items.reduce((acc, i) => acc + (i.fatGrams || 0), 0);
+
+  // Targets from Profile
+  const targetCalories = profileCalcs.targetCalories;
+  const targetProtein = profileCalcs.proteinGrams;
+  const targetCarbs = profileCalcs.carbsGrams;
+  const targetFat = profileCalcs.fatGrams;
+
+  // Remaining
+  const caloriesRemaining = targetCalories - totalCaloriesConsumed;
+  const caloriesPercent = Math.min(100, Math.round((totalCaloriesConsumed / targetCalories) * 100));
+
+  const proteinPercent = Math.min(100, Math.round((totalProteinConsumed / targetProtein) * 100));
+  const carbsPercent = Math.min(100, Math.round((totalCarbsConsumed / targetCarbs) * 100));
+  const fatPercent = Math.min(100, Math.round((totalFatConsumed / targetFat) * 100));
+
+  // Date controls
+  const handlePrevDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() - 1);
+    onSelectDate(d.toISOString().split('T')[0]);
+  };
+
+  const handleNextDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + 1);
+    onSelectDate(d.toISOString().split('T')[0]);
+  };
+
+  const isToday = selectedDate === new Date().toISOString().split('T')[0];
+
+  const handleSaveNewFood = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!foodName || calories === '' || !activeModalMeal) return;
+
+    const itemToAdd: Omit<FoodItem, 'id'> = {
+      name: foodName,
+      portionDescription: portion || '1 porción',
+      amountGrams: 100,
+      calories: Number(calories) || 0,
+      proteinGrams: Number(protein) || 0,
+      carbsGrams: Number(carbs) || 0,
+      fatGrams: Number(fat) || 0,
+      mealType: activeModalMeal,
+      timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    onAddFoodItem(selectedDate, itemToAdd);
+
+    // Reset
+    setFoodName('');
+    setPortion('1 porción');
+    setCalories('');
+    setProtein('');
+    setCarbs('');
+    setFat('');
+    setActiveModalMeal(null);
+  };
+
+  const mealsList: { type: MealType; label: string; icon: any; color: string }[] = [
+    { type: 'breakfast', label: 'Desayuno', icon: Coffee, color: 'text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300' },
+    { type: 'lunch', label: 'Almuerzo / Comida', icon: Sun, color: 'text-orange-600 bg-orange-50 dark:bg-orange-950/40 dark:text-orange-300' },
+    { type: 'dinner', label: 'Cena', icon: Moon, color: 'text-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 dark:text-indigo-300' },
+    { type: 'snacks', label: 'Snacks & Merienda', icon: Apple, color: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-300' },
+  ];
+
+  return (
+    <div className="space-y-6 pb-12" id="diary-screen">
+      {/* Date Navigator & Profile quick status */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handlePrevDay}
+            title="Día anterior"
+            className="p-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800/60 rounded-xl border border-zinc-200 dark:border-zinc-700">
+            <CalendarIcon className="w-4 h-4 text-emerald-600" />
+            <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+              {isToday ? 'Hoy' : selectedDate}
+            </span>
+            <span className="text-xs text-zinc-400">({selectedDate})</span>
+          </div>
+
+          <button
+            onClick={handleNextDay}
+            title="Día siguiente"
+            className="p-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+
+          {!isToday && (
+            <button
+              onClick={() => onSelectDate(new Date().toISOString().split('T')[0])}
+              className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2 py-1"
+            >
+              Volver a hoy
+            </button>
+          )}
+        </div>
+
+        {/* Actions: Escanear con Cámara & Profile Objective Pill */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            type="button"
+            id="diary-btn-open-scanner"
+            onClick={onNavigateToScanner}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all hover:scale-[1.02]"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span>Escanear Foto</span>
+          </button>
+
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-zinc-500 dark:text-zinc-400 hidden sm:inline">Metas para:</span>
+            <button
+              onClick={onOpenProfile}
+              className="font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 flex items-center gap-1 transition-colors"
+            >
+              <span>{profile.name || 'Usuario'} ({profile.goal === 'deficit' ? 'Déficit' : profile.goal === 'surplus' ? 'Superávit' : 'Mantenimiento'})</span>
+              <Edit3 className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Calories & Macros Tracker Banner */}
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+          {/* Calorie Dial / Summary */}
+          <div className="md:col-span-5 flex flex-col justify-center border-b md:border-b-0 md:border-r border-zinc-100 dark:border-zinc-800 pb-6 md:pb-0 md:pr-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Balance Calórico Diario
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                caloriesRemaining >= 0 
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' 
+                  : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
+              }`}>
+                {caloriesRemaining >= 0 ? `${caloriesRemaining} kcal restantes` : `${Math.abs(caloriesRemaining)} kcal superadas`}
+              </span>
+            </div>
+
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-4xl font-black text-zinc-900 dark:text-zinc-50 tracking-tight">
+                {totalCaloriesConsumed.toLocaleString()}
+              </span>
+              <span className="text-base font-semibold text-zinc-400">
+                / {targetCalories.toLocaleString()} kcal
+              </span>
+            </div>
+
+            {/* Main Progress Bar */}
+            <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-3.5 rounded-full overflow-hidden mt-3 p-0.5 border border-zinc-200 dark:border-zinc-700">
+              <div
+                style={{ width: `${Math.min(100, (totalCaloriesConsumed / targetCalories) * 100)}%` }}
+                className={`h-full rounded-full transition-all duration-500 ${
+                  caloriesRemaining < 0
+                    ? 'bg-gradient-to-r from-amber-500 to-rose-500'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-500'
+                }`}
+              />
+            </div>
+
+            {/* Subtext info */}
+            <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 mt-2">
+              <span>{caloriesPercent}% de tu meta diaria</span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                Objetivo: {profile.goal === 'deficit' ? 'Pérdida de grasa' : profile.goal === 'surplus' ? 'Hipertrofia' : 'Mantenimiento'}
+              </span>
+            </div>
+          </div>
+
+          {/* 3 Macro Progress Bars */}
+          <div className="md:col-span-7 space-y-3.5">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Macronutrientes (adaptados a tu perfil)
+              </span>
+              <button
+                onClick={onOpenProfile}
+                className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
+              >
+                Ajustar metas
+                <Edit3 className="w-3 h-3" />
+              </button>
+            </div>
+
+            {/* Protein Progress */}
+            <div className="bg-indigo-50/40 dark:bg-indigo-950/20 p-3 rounded-xl border border-indigo-100 dark:border-indigo-900/30">
+              <div className="flex items-center justify-between text-xs font-bold mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
+                  <span className="text-zinc-900 dark:text-zinc-100">Proteínas</span>
+                </div>
+                <div className="text-zinc-700 dark:text-zinc-300">
+                  <span className="text-indigo-600 dark:text-indigo-400 font-bold">{totalProteinConsumed}g</span>
+                  <span className="text-zinc-400 font-normal"> / {targetProtein}g</span>
+                  <span className="ml-2 text-[10px] text-zinc-500">({proteinPercent}%)</span>
+                </div>
+              </div>
+              <div className="w-full bg-zinc-200/80 dark:bg-zinc-800 h-2 rounded-full overflow-hidden">
+                <div
+                  style={{ width: `${Math.min(100, proteinPercent)}%` }}
+                  className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                />
+              </div>
+            </div>
+
+            {/* Carbs Progress */}
+            <div className="bg-amber-50/40 dark:bg-amber-950/20 p-3 rounded-xl border border-amber-100 dark:border-amber-900/30">
+              <div className="flex items-center justify-between text-xs font-bold mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                  <span className="text-zinc-900 dark:text-zinc-100">Carbohidratos</span>
+                </div>
+                <div className="text-zinc-700 dark:text-zinc-300">
+                  <span className="text-amber-600 dark:text-amber-400 font-bold">{totalCarbsConsumed}g</span>
+                  <span className="text-zinc-400 font-normal"> / {targetCarbs}g</span>
+                  <span className="ml-2 text-[10px] text-zinc-500">({carbsPercent}%)</span>
+                </div>
+              </div>
+              <div className="w-full bg-zinc-200/80 dark:bg-zinc-800 h-2 rounded-full overflow-hidden">
+                <div
+                  style={{ width: `${Math.min(100, carbsPercent)}%` }}
+                  className="bg-amber-500 h-full rounded-full transition-all duration-300"
+                />
+              </div>
+            </div>
+
+            {/* Fat Progress */}
+            <div className="bg-rose-50/40 dark:bg-rose-950/20 p-3 rounded-xl border border-rose-100 dark:border-rose-900/30">
+              <div className="flex items-center justify-between text-xs font-bold mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                  <span className="text-zinc-900 dark:text-zinc-100">Grasas</span>
+                </div>
+                <div className="text-zinc-700 dark:text-zinc-300">
+                  <span className="text-rose-600 dark:text-rose-400 font-bold">{totalFatConsumed}g</span>
+                  <span className="text-zinc-400 font-normal"> / {targetFat}g</span>
+                  <span className="ml-2 text-[10px] text-zinc-500">({fatPercent}%)</span>
+                </div>
+              </div>
+              <div className="w-full bg-zinc-200/80 dark:bg-zinc-800 h-2 rounded-full overflow-hidden">
+                <div
+                  style={{ width: `${Math.min(100, fatPercent)}%` }}
+                  className="bg-rose-500 h-full rounded-full transition-all duration-300"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Daily Water Hydration Tracker Card */}
+      <WaterTrackerCard
+        currentWaterMl={currentLog.waterMl || 0}
+        targetWaterMl={currentLog.waterGoalMl || 2500}
+        onUpdateWater={(newAmount) => {
+          if (onUpdateWater) {
+            onUpdateWater(selectedDate, newAmount);
+          }
+        }}
+      />
+
+      {/* Meals Sections OR Locked History View */}
+      {isHistoryLocked ? (
+        <div className="p-8 text-center rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center mx-auto shadow-xs">
+            <Lock className="w-7 h-7" />
+          </div>
+          <div className="max-w-md mx-auto">
+            <h3 className="text-lg font-black text-zinc-900 dark:text-zinc-100">
+              Historial de más de 7 días restringido
+            </h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+              El <strong>Plan Gratuito</strong> incluye los registros de los últimos 7 días. 
+              Actualiza a <strong>NutriFit Pro</strong> o accede como <strong>Miembro VIP</strong> para consultar y registrar en cualquier fecha de tu historial sin restricciones.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2 flex-wrap">
+            {onOpenPlansModal && (
+              <button
+                type="button"
+                id="btn-diary-upgrade-pro"
+                onClick={onOpenPlansModal}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 hover:scale-105"
+              >
+                <Sparkles className="w-4 h-4 text-amber-300" />
+                <span>Desbloquear Historial con Pro ($7.99/m)</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onSelectDate(new Date().toISOString().split('T')[0])}
+              className="px-4 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 text-zinc-700 dark:text-zinc-300 text-xs font-bold transition-all"
+            >
+              Volver a Hoy
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+        {mealsList.map((meal) => {
+          const mealItems = items.filter((i) => i.mealType === meal.type);
+          const mealCals = mealItems.reduce((acc, i) => acc + (i.calories || 0), 0);
+          const mealProtein = mealItems.reduce((acc, i) => acc + (i.proteinGrams || 0), 0);
+          const mealCarbs = mealItems.reduce((acc, i) => acc + (i.carbsGrams || 0), 0);
+          const mealFat = mealItems.reduce((acc, i) => acc + (i.fatGrams || 0), 0);
+          const MealIcon = meal.icon;
+
+          return (
+            <div
+              key={meal.type}
+              id={`meal-card-${meal.type}`}
+              className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-xs"
+            >
+              {/* Meal Header */}
+              <div className="p-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${meal.color}`}>
+                    <MealIcon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      {meal.label}
+                    </h3>
+                    <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{mealCals} kcal</span>
+                      <span>·</span>
+                      <span>P: {mealProtein}g</span>
+                      <span>C: {mealCarbs}g</span>
+                      <span>G: {mealFat}g</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onNavigateToScanner}
+                    title={`Escanear foto para ${meal.label}`}
+                    className="p-1.5 sm:px-2 sm:py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/50 dark:hover:text-emerald-300 text-zinc-600 dark:text-zinc-400 text-xs font-semibold rounded-xl transition-all flex items-center gap-1 border border-zinc-200/80 dark:border-zinc-700"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline text-[11px]">Escanear</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    id={`btn-add-food-${meal.type}`}
+                    onClick={() => setActiveModalMeal(meal.type)}
+                    className="py-1.5 px-3 bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/50 dark:hover:text-emerald-300 text-zinc-700 dark:text-zinc-300 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 border border-zinc-200/80 dark:border-zinc-700"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Añadir alimento
+                  </button>
+                </div>
+              </div>
+
+              {/* Items List */}
+              {mealItems.length === 0 ? (
+                <div className="p-5 text-center text-xs text-zinc-400 dark:text-zinc-500 italic">
+                  No hay alimentos registrados en {meal.label.toLowerCase()}.
+                </div>
+              ) : (
+                <div className="divide-y divide-zinc-100 dark:divide-zinc-800/80">
+                  {mealItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="p-3.5 px-4 flex items-center justify-between hover:bg-zinc-50/70 dark:hover:bg-zinc-800/30 transition-colors group"
+                    >
+                      <div className="pr-4">
+                        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 block">
+                          {item.name}
+                        </span>
+                        <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          {item.portionDescription} {item.timeAdded ? `· ${item.timeAdded}` : ''}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-4 shrink-0">
+                        <div className="text-right">
+                          <span className="text-xs font-black text-zinc-800 dark:text-zinc-200 block">
+                            {item.calories} kcal
+                          </span>
+                          <span className="text-[10px] text-zinc-400">
+                            {item.proteinGrams}P · {item.carbsGrams}C · {item.fatGrams}G
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => onRemoveFoodItem(selectedDate, item.id)}
+                          title="Eliminar del diario"
+                          className="text-zinc-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      )}
+
+      {/* Add Food Modal */}
+      {activeModalMeal && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 w-full max-w-md rounded-2xl p-6 shadow-xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3 mb-4">
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                Añadir Alimento a {mealsList.find((m) => m.type === activeModalMeal)?.label}
+              </h3>
+              <button
+                onClick={() => setActiveModalMeal(null)}
+                className="text-zinc-400 hover:text-zinc-600 text-xs font-bold"
+              >
+                Cerrar ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNewFood} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-food-name">
+                  Nombre del alimento / plato *
+                </label>
+                <input
+                  id="modal-food-name"
+                  type="text"
+                  required
+                  placeholder="Ej. Salmón al horno con patatas"
+                  value={foodName}
+                  onChange={(e) => setFoodName(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-portion">
+                  Porción / Descripción
+                </label>
+                <input
+                  id="modal-portion"
+                  type="text"
+                  placeholder="Ej. 1 filete (180g)"
+                  value={portion}
+                  onChange={(e) => setPortion(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-calories">
+                    Calorías *
+                  </label>
+                  <input
+                    id="modal-calories"
+                    type="number"
+                    required
+                    min={0}
+                    placeholder="kcal"
+                    value={calories}
+                    onChange={(e) => setCalories(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-indigo-600 dark:text-indigo-400 mb-1" htmlFor="modal-protein">
+                    Proteína (g)
+                  </label>
+                  <input
+                    id="modal-protein"
+                    type="number"
+                    min={0}
+                    placeholder="g"
+                    value={protein}
+                    onChange={(e) => setProtein(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-amber-600 dark:text-amber-400 mb-1" htmlFor="modal-carbs">
+                    Carbos (g)
+                  </label>
+                  <input
+                    id="modal-carbs"
+                    type="number"
+                    min={0}
+                    placeholder="g"
+                    value={carbs}
+                    onChange={(e) => setCarbs(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-rose-600 dark:text-rose-400 mb-1" htmlFor="modal-fat">
+                    Grasa (g)
+                  </label>
+                  <input
+                    id="modal-fat"
+                    type="number"
+                    min={0}
+                    placeholder="g"
+                    value={fat}
+                    onChange={(e) => setFat(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              {/* Quick suggestions */}
+              <div>
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-1.5">
+                  Plantillas rápidas:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { name: 'Arroz con pollo y verduras', cal: 480, p: 42, c: 55, f: 8 },
+                    { name: 'Batido de proteína con plátano', cal: 260, p: 30, c: 28, f: 3 },
+                    { name: 'Tostada integral con aguacate y huevo', cal: 320, p: 14, c: 25, f: 18 },
+                    { name: 'Manzana con mantequilla de cacahuete', cal: 190, p: 5, c: 22, f: 9 },
+                  ].map((preset, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        setFoodName(preset.name);
+                        setCalories(preset.cal);
+                        setProtein(preset.p);
+                        setCarbs(preset.c);
+                        setFat(preset.f);
+                      }}
+                      className="text-[11px] px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
+                    >
+                      {preset.name} ({preset.cal} kcal)
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setActiveModalMeal(null)}
+                  className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 rounded-xl"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs"
+                >
+                  Guardar Alimento
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
