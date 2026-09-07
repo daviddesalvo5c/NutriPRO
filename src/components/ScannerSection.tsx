@@ -56,7 +56,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
   const isProOrVip = hasUserProAccess(userEmail, currentTier);
 
   // Stages: 'viewfinder' | 'analyzing' | 'result'
-  const [stage, setStage] = useState<'viewfinder' | 'analyzing' | 'result'>('viewfinder');
+  const [stage, setStage] = useState<'viewfinder' | 'analyzing' | 'error' | 'result'>('viewfinder');
   
   // Camera & Device states
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -177,7 +177,9 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       });
 
       if (!response.ok) {
-        throw new Error(`Error en el servidor (${response.status})`);
+        // El servidor manda { error, code } cuando puede; si no, queda el estado.
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.error || `El servidor respondió con un error (${response.status}).`);
       }
 
       const data: AnalysisResult = await response.json();
@@ -191,27 +193,13 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
         incrementTodayAiScansCount(userEmail);
       }
     } catch (err: any) {
+      // Nunca se inventa un resultado: un plato ficticio acabaría en el diario
+      // del usuario falseando su balance sin que pueda darse cuenta.
       console.error('Analysis failed:', err);
-      // Fallback reliable data so user can still adjust and register smoothly
-      const fallbackResult: AnalysisResult = {
-        name: 'Plato Saludable',
-        category: 'Comida Principal',
-        weightGrams: 320,
-        calories: 460,
-        protein: 32,
-        carbs: 46,
-        fat: 16,
-        confidence: 85,
-        observation: 'Estimación calculada a partir de los patrones visuales del plato.',
-        ingredients: [
-          { name: 'Porción principal de comida', amount: '200g' },
-          { name: 'Guarnición equilibrada', amount: '120g' },
-        ],
-      };
-      setResult(fallbackResult);
-      setEditableDishName(fallbackResult.name);
-      setPortionMultiplier(1.0);
-      setStage('result');
+      setAnalysisError(
+        err?.message || 'No se pudo analizar la foto. Revisa tu conexión e inténtalo de nuevo.'
+      );
+      setStage('error');
     } finally {
       clearTimeout(timer1);
       clearTimeout(timer2);
@@ -307,7 +295,13 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
   const handleReset = () => {
     setCapturedImage(null);
     setResult(null);
+    setAnalysisError(null);
     setStage('viewfinder');
+  };
+
+  // Retry the analysis with the same photo, sin volver a sacarla
+  const handleRetryAnalysis = () => {
+    if (capturedImage) processImage(capturedImage);
   };
 
   return (
@@ -658,6 +652,52 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
           {/* Progress Bar Animation */}
           <div className="w-64 mx-auto bg-zinc-100 dark:bg-zinc-800 h-2 rounded-full overflow-hidden border border-zinc-200 dark:border-zinc-700">
             <div className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full w-full animate-pulse rounded-full" />
+          </div>
+        </div>
+      )}
+
+      {/* STAGE 2b: El análisis falló. Se dice, no se inventa un resultado. */}
+      {stage === 'error' && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-8 sm:p-12 rounded-3xl text-center space-y-6 shadow-md animate-in fade-in">
+          {capturedImage && (
+            <div className="relative w-40 h-40 mx-auto rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-700 opacity-60">
+              <img src={capturedImage} alt="Plato capturado" className="w-full h-full object-cover" />
+            </div>
+          )}
+
+          <div className="space-y-2 max-w-md mx-auto">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800">
+              <AlertCircle className="w-3.5 h-3.5" />
+              No se pudo completar el análisis
+            </div>
+            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
+              {analysisError}
+            </h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              No registramos valores estimados a ciegas: acabarían en tu diario falseando tu
+              balance. Reintenta, o añade el alimento a mano desde la sección Alimentos.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 justify-center max-w-sm mx-auto">
+            {capturedImage && (
+              <button
+                type="button"
+                onClick={handleRetryAnalysis}
+                className="flex-1 py-3 px-5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-extrabold shadow-md transition-all flex items-center justify-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Reintentar
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleReset}
+              className="flex-1 py-3 px-5 rounded-xl border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-bold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all flex items-center justify-center gap-2"
+            >
+              <Camera className="w-4 h-4" />
+              Tomar otra foto
+            </button>
           </div>
         </div>
       )}
