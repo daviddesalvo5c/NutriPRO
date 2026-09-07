@@ -13,10 +13,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  loadRegisteredUsers, 
-  registerNewUser 
-} from '../utils/storage';
+import { signIn, signUp } from '../services/supabaseService';
 import { UserSession } from '../types';
 
 interface AuthViewProps {
@@ -38,7 +35,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   // Submit handler
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -56,61 +53,41 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
       return;
     }
 
+    if (mode === 'register') {
+      if (!name.trim()) {
+        setErrorMessage('Por favor, ingresa tu nombre completo.');
+        return;
+      }
+      // Supabase Auth exige seis caracteres como mínimo.
+      if (cleanPassword.length < 6) {
+        setErrorMessage('La contraseña debe tener al menos 6 caracteres.');
+        return;
+      }
+    }
+
     setIsLoading(true);
 
-    setTimeout(() => {
-      if (mode === 'login') {
-        const users = loadRegisteredUsers();
-        const found = users.find(
-          (u) => u.email.toLowerCase() === cleanEmail && u.password === cleanPassword
-        );
+    // La identidad la lleva Supabase Auth: la contraseña nunca pasa por
+    // nuestras tablas ni se compara en el navegador.
+    const result =
+      mode === 'login'
+        ? await signIn(cleanEmail, cleanPassword)
+        : await signUp(name.trim(), cleanEmail, cleanPassword);
 
-        if (!found) {
-          setIsLoading(false);
-          setErrorMessage('Credenciales incorrectas. Verifica tu correo y contraseña.');
-          return;
-        }
+    if (!result.success || !result.data) {
+      setIsLoading(false);
+      setErrorMessage(result.message || 'No se pudo completar la operación.');
+      return;
+    }
 
-        setSuccessMessage(`¡Bienvenido de nuevo, ${found.name}!`);
-        setTimeout(() => {
-          onLoginSuccess({
-            email: found.email,
-            name: found.name,
-            isFounder: found.isFounder,
-          });
-        }, 350);
-      } else {
-        // Register mode
-        const cleanName = name.trim();
-        if (!cleanName) {
-          setIsLoading(false);
-          setErrorMessage('Por favor, ingresa tu nombre completo.');
-          return;
-        }
+    setSuccessMessage(
+      mode === 'login'
+        ? `¡Bienvenido de nuevo, ${result.data.name}!`
+        : '¡Cuenta creada con éxito! Iniciando tu sesión...'
+    );
 
-        if (cleanPassword.length < 5) {
-          setIsLoading(false);
-          setErrorMessage('La contraseña debe tener al menos 5 caracteres.');
-          return;
-        }
-
-        const res = registerNewUser(cleanName, cleanEmail, cleanPassword);
-        if (!res.success || !res.user) {
-          setIsLoading(false);
-          setErrorMessage(res.message || 'No se pudo crear la cuenta.');
-          return;
-        }
-
-        setSuccessMessage(`¡Cuenta creada con éxito! Iniciando tu sesión privada...`);
-        setTimeout(() => {
-          onLoginSuccess({
-            email: res.user!.email,
-            name: res.user!.name,
-            isFounder: res.user!.isFounder,
-          });
-        }, 400);
-      }
-    }, 300);
+    const session = result.data;
+    setTimeout(() => onLoginSuccess(session), 350);
   };
 
   return (

@@ -6,6 +6,17 @@ import { ScannerSection } from './components/ScannerSection';
 import { ProgressSection } from './components/ProgressSection';
 import { PlannerAndRecipesSection } from './components/PlannerAndRecipesSection';
 import { FoodsSection } from './components/FoodsSection';
+import {
+  addFoodLog,
+  fetchDailyLogs,
+  fetchProfile,
+  getActiveSession,
+  getCurrentUserId,
+  removeFoodLog,
+  saveProfile,
+  saveWater,
+  signOut,
+} from './services/supabaseService';
 import { AuthView } from './components/AuthView';
 import { SubscriptionPlansModal } from './components/SubscriptionPlansModal';
 import { 
@@ -117,6 +128,54 @@ export default function App() {
     return [];
   });
 
+  // Identificador del usuario en la nube. Null mientras no haya sesión de
+  // Supabase, y entonces la app funciona solo con el almacenamiento local.
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // Al abrir la app se restaura la sesión desde Supabase, no desde el navegador:
+  // el token puede haber caducado y el estado local mentiría.
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      const cloudSession = await getActiveSession();
+      if (!alive || !cloudSession) return;
+
+      const id = await getCurrentUserId();
+      if (!alive) return;
+
+      setSession(cloudSession);
+      setCurrentTier(cloudSession.tier ?? 'free');
+      setUserId(id);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Con sesión en la nube, la fuente de verdad es Supabase: se traen el perfil
+  // y el diario y se reemplaza lo que hubiera en local.
+  useEffect(() => {
+    if (!userId || !session) return;
+    let alive = true;
+
+    (async () => {
+      const [cloudProfile, cloudLogs] = await Promise.all([
+        fetchProfile(userId, session.name),
+        fetchDailyLogs(userId),
+      ]);
+
+      if (!alive) return;
+      setProfile(cloudProfile);
+      setDailyLogs(cloudLogs);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
+
   // Whenever session changes, reload that user's private data
   useEffect(() => {
     if (session) {
@@ -139,6 +198,7 @@ export default function App() {
   const handleLoginSuccess = (newSession: UserSession) => {
     saveActiveSession(newSession);
     setSession(newSession);
+    void getCurrentUserId().then(setUserId);
     const userProfile = loadStoredProfileForUser(newSession.email, newSession.name);
     const userLogs = loadDailyLogsForUser(newSession.email);
     const userWeights = loadWeightHistoryForUser(newSession.email, userProfile.weightKg);
@@ -182,8 +242,10 @@ export default function App() {
 
   // Handle session logout
   const handleLogout = () => {
+    void signOut();
     clearActiveSession();
     setSession(null);
+    setUserId(null);
     setActiveTab('diary');
   };
 
@@ -192,15 +254,22 @@ export default function App() {
     if (!session) return;
     setProfile(updated);
     saveStoredProfileForUser(session.email, updated);
+    if (userId) void saveProfile(userId, updated);
   };
 
   // Add food item to a specific date log for the active user
-  const handleAddFoodItem = (date: string, itemWithoutId: Omit<FoodItem, 'id'>) => {
+  const handleAddFoodItem = async (date: string, itemWithoutId: Omit<FoodItem, 'id'>) => {
     if (!session) return;
-    const newItem: FoodItem = {
-      ...itemWithoutId,
-      id: 'food_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-    };
+
+    // Si hay sesión en la nube, el id lo asigna la base: así el borrado
+    // posterior apunta a la misma fila y no a un id inventado en el navegador.
+    let id = 'food_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    if (userId) {
+      const saved = await addFoodLog(userId, date, itemWithoutId);
+      if (saved.success && saved.data) id = saved.data;
+    }
+
+    const newItem: FoodItem = { ...itemWithoutId, id };
 
     setDailyLogs((prev) => {
       const existingLog = prev[date] || { date, items: [] };
@@ -242,6 +311,7 @@ export default function App() {
   // Remove food item from a date log for the active user
   const handleRemoveFoodItem = (date: string, itemId: string) => {
     if (!session) return;
+    if (userId) void removeFoodLog(itemId);
     setDailyLogs((prev) => {
       const existingLog = prev[date];
       if (!existingLog) return prev;
@@ -260,6 +330,7 @@ export default function App() {
   // Update daily water hydration
   const handleUpdateWater = (date: string, amountMl: number) => {
     if (!session) return;
+    if (userId) void saveWater(userId, date, amountMl, dailyLogs[date]?.waterGoalMl ?? 2500);
     setDailyLogs((prev) => {
       const existingLog = prev[date] || { date, items: [] };
       const updatedLogs: Record<string, DailyLog> = {

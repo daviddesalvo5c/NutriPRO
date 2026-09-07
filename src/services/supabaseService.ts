@@ -1,670 +1,332 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { 
-  AuthUser, 
-  DailyLog, 
-  FoodItem, 
-  MealType, 
-  SubscriptionTier, 
-  SubscriptionTransaction 
+import {
+  DailyLog,
+  FoodItem,
+  MealType,
+  SubscriptionTier,
+  UserProfile,
+  UserSession,
 } from '../types';
-import { FOUNDER_EMAIL, isFounderEmail } from '../utils/storage';
+import { createDefaultProfile } from '../utils/storage';
 
-export interface SupabaseStatus {
-  isConfigured: boolean;
-  isConnected: boolean;
-  url: string;
-  hasKey: boolean;
-  missingTables: string[];
-  errorMessage?: string;
+/**
+ * Acceso a Supabase.
+ *
+ * La identidad la lleva Supabase Auth: no hay contraseñas en tablas propias.
+ * Las políticas RLS garantizan que cada usuario solo alcanza sus filas, así que
+ * las consultas no filtran por usuario a mano — lo hace la base.
+ *
+ * El plan de suscripción no se puede escribir desde el navegador: la columna
+ * está fuera de los permisos del rol `authenticated`. Solo lo cambia el
+ * servidor al confirmar un pago.
+ */
+
+export interface ServiceResult<T = void> {
+  success: boolean;
+  message?: string;
+  data?: T;
 }
 
-// -------------------------------------------------------------
-// CONNECTION & HEALTH CHECK
-// -------------------------------------------------------------
-
-export async function checkSupabaseHealth(): Promise<SupabaseStatus> {
-  const url = import.meta.env.VITE_SUPABASE_URL || '';
-  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-
-  if (!isSupabaseConfigured) {
-    return {
-      isConfigured: false,
-      isConnected: false,
-      url,
-      hasKey: Boolean(key),
-      missingTables: [],
-      errorMessage: 'Credenciales VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY no configuradas en .env',
-    };
-  }
-
-  const missingTables: string[] = [];
-  try {
-    // Probe users table
-    const { error: usersErr } = await supabase.from('users').select('id').limit(1);
-    if (usersErr && usersErr.code === '42P01') {
-      missingTables.push('users');
-    }
-
-    // Probe food_items table
-    const { error: foodErr } = await supabase.from('food_items').select('id').limit(1);
-    if (foodErr && foodErr.code === '42P01') {
-      missingTables.push('food_items');
-    }
-
-    // Probe water_logs table
-    const { error: waterErr } = await supabase.from('water_logs').select('id').limit(1);
-    if (waterErr && waterErr.code === '42P01') {
-      missingTables.push('water_logs');
-    }
-
-    // Probe vip_invitations table
-    const { error: vipErr } = await supabase.from('vip_invitations').select('id').limit(1);
-    if (vipErr && vipErr.code === '42P01') {
-      missingTables.push('vip_invitations');
-    }
-
-    // Probe subscription_transactions table
-    const { error: txErr } = await supabase.from('subscription_transactions').select('id').limit(1);
-    if (txErr && txErr.code === '42P01') {
-      missingTables.push('subscription_transactions');
-    }
-
-    const isConnected = missingTables.length === 0;
-
-    return {
-      isConfigured: true,
-      isConnected,
-      url,
-      hasKey: true,
-      missingTables,
-      errorMessage: missingTables.length > 0 
-        ? `Tablas pendientes de creación: ${missingTables.join(', ')}` 
-        : undefined,
-    };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      isConfigured: true,
-      isConnected: false,
-      url,
-      hasKey: true,
-      missingTables: ['error_connecting'],
-      errorMessage: `Error de red al conectar con Supabase: ${message}`,
-    };
-  }
+function fail(message: string): ServiceResult<any> {
+  return { success: false, message };
 }
 
-// -------------------------------------------------------------
-// 1. AUTHENTICATION & USERS (Table: users)
-// -------------------------------------------------------------
+function notConfigured(): ServiceResult<any> {
+  return fail('La base de datos no está configurada.');
+}
 
-export async function supabaseLogin(
-  email: string, 
+// --------------------------------------------------------------- autenticación
+
+export async function signUp(
+  name: string,
+  email: string,
   password: string
-): Promise<{ success: boolean; message?: string; user?: AuthUser }> {
-  const cleanEmail = email.trim().toLowerCase();
+): Promise<ServiceResult<UserSession>> {
+  if (!isSupabaseConfigured) return notConfigured();
 
-  if (!isSupabaseConfigured) {
-    return { success: false, message: 'Supabase no está configurado.' };
+  const { data, error } = await supabase.auth.signUp({
+    email: email.trim().toLowerCase(),
+    password,
+    options: { data: { full_name: name.trim() } },
+  });
+
+  if (error) {
+    if (error.message.toLowerCase().includes('already')) {
+      return fail('Ese correo ya está registrado. Prueba a iniciar sesión.');
+    }
+    return fail(error.message);
   }
 
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', cleanEmail)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Error querying Supabase users table:', error);
-      return { success: false, message: `Error en Supabase: ${error.message}` };
-    }
-
-    if (!data) {
-      return { success: false, message: 'Usuario no encontrado en la base de datos de Supabase.' };
-    }
-
-    // Validate password
-    if (data.password && data.password !== password.trim()) {
-      return { success: false, message: 'Contraseña incorrecta.' };
-    }
-
-    const authUser: AuthUser = {
-      email: data.email,
-      name: data.name,
-      isFounder: Boolean(data.is_founder || isFounderEmail(data.email)),
-      tier: (data.tier as SubscriptionTier) || (isFounderEmail(data.email) ? 'vip' : 'free'),
-      subscribedAt: data.subscribed_at,
-      createdAt: data.created_at || new Date().toISOString(),
-    };
-
-    return { success: true, user: authUser };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Supabase login exception:', err);
-    return { success: false, message: `Excepción de conexión: ${message}` };
+  // Sin sesión inmediata, el proyecto exige confirmar el correo.
+  if (!data.session || !data.user) {
+    return fail('Revisa tu correo para confirmar la cuenta antes de entrar.');
   }
+
+  return {
+    success: true,
+    data: { email: data.user.email!, name: name.trim(), tier: 'free' },
+  };
 }
 
-export async function supabaseRegister(
-  name: string, 
-  email: string, 
+export async function signIn(
+  email: string,
   password: string
-): Promise<{ success: boolean; message?: string; user?: AuthUser }> {
-  const cleanEmail = email.trim().toLowerCase();
-  const cleanName = name.trim();
+): Promise<ServiceResult<UserSession>> {
+  if (!isSupabaseConfigured) return notConfigured();
 
-  if (!isSupabaseConfigured) {
-    return { success: false, message: 'Supabase no está configurado.' };
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+
+  if (error) {
+    return fail(
+      error.message.toLowerCase().includes('invalid')
+        ? 'Correo o contraseña incorrectos.'
+        : error.message
+    );
   }
 
-  try {
-    // Check if user already exists
-    const { data: existing, error: checkError } = await supabase
-      .from('users')
-      .select('id, email')
-      .eq('email', cleanEmail)
-      .maybeSingle();
-
-    if (checkError) {
-      console.error('Error checking user in Supabase:', checkError);
-      return { success: false, message: `Error en Supabase: ${checkError.message}` };
-    }
-
-    if (existing) {
-      return { success: false, message: 'Este correo ya está registrado en Supabase.' };
-    }
-
-    const isFounder = isFounderEmail(cleanEmail);
-    const tier: SubscriptionTier = isFounder ? 'vip' : 'free';
-
-    const insertPayload = {
-      email: cleanEmail,
-      name: cleanName,
-      password: password.trim(),
-      is_founder: isFounder,
-      tier,
-      created_at: new Date().toISOString(),
-    };
-
-    const { data: created, error: insertError } = await supabase
-      .from('users')
-      .insert([insertPayload])
-      .select()
-      .single();
-
-    if (insertError) {
-      console.error('Error inserting user to Supabase:', insertError);
-      return { success: false, message: `Error al registrar en Supabase: ${insertError.message}` };
-    }
-
-    const authUser: AuthUser = {
-      email: created.email,
-      name: created.name,
-      isFounder: Boolean(created.is_founder),
-      tier: (created.tier as SubscriptionTier) || 'free',
-      createdAt: created.created_at,
-    };
-
-    return { success: true, user: authUser };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Supabase register exception:', err);
-    return { success: false, message: `Excepción al conectar con Supabase: ${message}` };
-  }
+  return { success: true, data: await sessionFromUser(data.user.id, data.user.email!) };
 }
 
-export async function supabaseFetchRegisteredUsers(): Promise<AuthUser[]> {
-  if (!isSupabaseConfigured) return [];
-
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching registered users from Supabase:', error);
-      return [];
-    }
-
-    return (data || []).map((row) => ({
-      email: row.email,
-      name: row.name,
-      isFounder: Boolean(row.is_founder || isFounderEmail(row.email)),
-      tier: (row.tier as SubscriptionTier) || (isFounderEmail(row.email) ? 'vip' : 'free'),
-      subscribedAt: row.subscribed_at,
-      createdAt: row.created_at || new Date().toISOString(),
-    }));
-  } catch (err) {
-    console.error('Exception fetching users from Supabase:', err);
-    return [];
-  }
+export async function signOut(): Promise<void> {
+  if (isSupabaseConfigured) await supabase.auth.signOut();
 }
 
-export async function supabaseUpdateUserTier(
-  email: string, 
-  tier: SubscriptionTier, 
-  billingCycle: 'monthly' | 'annual' = 'monthly'
-): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
-
-  const cleanEmail = email.trim().toLowerCase();
-  try {
-    const { error } = await supabase
-      .from('users')
-      .update({
-        tier,
-        subscribed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('email', cleanEmail);
-
-    if (error) {
-      console.error('Error updating user tier in Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception updating user tier in Supabase:', err);
-    return false;
-  }
+async function sessionFromUser(userId: string, email: string): Promise<UserSession> {
+  const profile = await fetchProfileRow(userId);
+  return {
+    email,
+    name: profile?.full_name || email.split('@')[0],
+    tier: (profile?.subscription_plan as SubscriptionTier) || 'free',
+    isFounder: profile?.is_founder ?? false,
+  };
 }
 
-// -------------------------------------------------------------
-// 2. DIARY & FOOD ITEMS (Tables: food_items & water_logs)
-// -------------------------------------------------------------
+/** Sesión activa al abrir la app, si el token sigue siendo válido. */
+export async function getActiveSession(): Promise<UserSession | null> {
+  if (!isSupabaseConfigured) return null;
 
-export async function supabaseFetchDailyLogs(email: string): Promise<Record<string, DailyLog>> {
+  const { data } = await supabase.auth.getSession();
+  const user = data.session?.user;
+  if (!user) return null;
+
+  return sessionFromUser(user.id, user.email!);
+}
+
+export async function getCurrentUserId(): Promise<string | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data } = await supabase.auth.getUser();
+  return data.user?.id ?? null;
+}
+
+// ---------------------------------------------------------------------- perfil
+
+async function fetchProfileRow(userId: string): Promise<any | null> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[supabase] perfil:', error.message);
+    return null;
+  }
+  return data;
+}
+
+/** Perfil del usuario. Si aún no tiene datos, devuelve los valores por defecto. */
+export async function fetchProfile(userId: string, fallbackName = 'Usuario'): Promise<UserProfile> {
+  const row = await fetchProfileRow(userId);
+  const base = createDefaultProfile(row?.full_name || fallbackName);
+
+  if (!row) return base;
+
+  return {
+    ...base,
+    name: row.full_name ?? base.name,
+    age: row.age ?? base.age,
+    gender: (row.gender as UserProfile['gender']) ?? base.gender,
+    heightCm: row.height_cm != null ? Number(row.height_cm) : base.heightCm,
+    weightKg: row.weight_kg != null ? Number(row.weight_kg) : base.weightKg,
+    activityLevel: (row.activity_level as UserProfile['activityLevel']) ?? base.activityLevel,
+    formula: (row.formula as UserProfile['formula']) ?? base.formula,
+    goal: (row.goal as UserProfile['goal']) ?? base.goal,
+    goalIntensity: (row.goal_intensity as UserProfile['goalIntensity']) ?? base.goalIntensity,
+    customTargetsEnabled: row.custom_targets_enabled ?? base.customTargetsEnabled,
+    targetCalories: row.target_calories ?? base.targetCalories,
+    targetProteinGrams: row.target_protein ?? base.targetProteinGrams,
+    targetCarbsGrams: row.target_carbs ?? base.targetCarbsGrams,
+    targetFatGrams: row.target_fat ?? base.targetFatGrams,
+    updatedAt: row.updated_at ?? base.updatedAt,
+  };
+}
+
+export async function saveProfile(userId: string, profile: UserProfile): Promise<ServiceResult> {
+  if (!isSupabaseConfigured) return notConfigured();
+
+  // subscription_plan e is_founder quedan fuera a propósito: el rol del
+  // navegador no tiene permiso sobre esas columnas.
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      full_name: profile.name,
+      age: profile.age,
+      gender: profile.gender,
+      height_cm: profile.heightCm,
+      weight_kg: profile.weightKg,
+      activity_level: profile.activityLevel,
+      formula: profile.formula,
+      goal: profile.goal,
+      goal_intensity: profile.goalIntensity,
+      custom_targets_enabled: profile.customTargetsEnabled,
+      target_calories: profile.targetCalories,
+      target_protein: profile.targetProteinGrams,
+      target_carbs: profile.targetCarbsGrams,
+      target_fat: profile.targetFatGrams,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', userId);
+
+  if (error) {
+    console.error('[supabase] guardar perfil:', error.message);
+    return fail('No se pudo guardar el perfil.');
+  }
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------- diario
+
+const toDateKey = (value: string) => String(value).slice(0, 10);
+
+/** Todo el diario del usuario, agrupado por fecha. */
+export async function fetchDailyLogs(userId: string): Promise<Record<string, DailyLog>> {
   if (!isSupabaseConfigured) return {};
 
-  const cleanEmail = email.trim().toLowerCase();
-  try {
-    // 1. Fetch food items
-    const { data: foodRows, error: foodError } = await supabase
-      .from('food_items')
-      .select('*')
-      .eq('user_email', cleanEmail)
-      .order('created_at', { ascending: false });
+  const [foodsResult, metricsResult] = await Promise.all([
+    supabase.from('food_logs').select('*').eq('user_id', userId).order('created_at'),
+    supabase.from('daily_metrics').select('*').eq('user_id', userId),
+  ]);
 
-    if (foodError) {
-      console.error('Error fetching food items from Supabase:', foodError);
-      return {};
-    }
-
-    // 2. Fetch water logs
-    const { data: waterRows, error: waterError } = await supabase
-      .from('water_logs')
-      .select('*')
-      .eq('user_email', cleanEmail);
-
-    if (waterError) {
-      console.warn('Warning fetching water logs from Supabase:', waterError);
-    }
-
-    // Map into daily logs
-    const logs: Record<string, DailyLog> = {};
-
-    // Populate food items
-    (foodRows || []).forEach((row) => {
-      const date = row.date;
-      if (!logs[date]) {
-        logs[date] = { date, items: [] };
-      }
-      const item: FoodItem = {
-        id: row.id,
-        name: row.name,
-        portionDescription: row.portion_description || '',
-        amountGrams: Number(row.amount_grams) || 0,
-        calories: Number(row.calories) || 0,
-        proteinGrams: Number(row.protein_grams) || 0,
-        carbsGrams: Number(row.carbs_grams) || 0,
-        fatGrams: Number(row.fat_grams) || 0,
-        mealType: row.meal_type as MealType,
-        timeAdded: row.time_added || undefined,
-      };
-      logs[date].items.push(item);
-    });
-
-    // Populate water
-    (waterRows || []).forEach((row) => {
-      const date = row.date;
-      if (!logs[date]) {
-        logs[date] = { date, items: [] };
-      }
-      logs[date].waterMl = Number(row.water_ml) || 0;
-      if (row.water_goal_ml) {
-        logs[date].waterGoalMl = Number(row.water_goal_ml);
-      }
-    });
-
-    return logs;
-  } catch (err) {
-    console.error('Exception fetching daily logs from Supabase:', err);
+  if (foodsResult.error) {
+    console.error('[supabase] diario:', foodsResult.error.message);
     return {};
   }
-}
 
-export async function supabaseAddFoodItem(
-  email: string, 
-  date: string, 
-  item: FoodItem
-): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+  const logs: Record<string, DailyLog> = {};
+  const ensure = (date: string) => (logs[date] ??= { date, items: [] });
 
-  const cleanEmail = email.trim().toLowerCase();
-  try {
-    const { error } = await supabase
-      .from('food_items')
-      .insert([{
-        id: item.id,
-        user_email: cleanEmail,
-        date,
-        name: item.name,
-        portion_description: item.portionDescription,
-        amount_grams: item.amountGrams,
-        calories: item.calories,
-        protein_grams: item.proteinGrams,
-        carbs_grams: item.carbsGrams,
-        fat_grams: item.fatGrams,
-        meal_type: item.mealType,
-        time_added: item.timeAdded,
-        created_at: new Date().toISOString(),
-      }]);
-
-    if (error) {
-      console.error('Error inserting food item to Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception adding food item to Supabase:', err);
-    return false;
+  for (const row of foodsResult.data ?? []) {
+    const date = toDateKey(row.log_date);
+    ensure(date).items.push({
+      id: row.id,
+      name: row.food_name,
+      portionDescription: row.portion_description ?? '1 porción',
+      amountGrams: row.amount_grams != null ? Number(row.amount_grams) : 100,
+      calories: Number(row.calories),
+      proteinGrams: Number(row.protein),
+      carbsGrams: Number(row.carbs),
+      fatGrams: Number(row.fat),
+      mealType: row.meal_type as MealType,
+      timeAdded: new Date(row.created_at).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    });
   }
+
+  for (const row of metricsResult.data ?? []) {
+    const date = toDateKey(row.log_date);
+    const log = ensure(date);
+    log.waterMl = Number(row.water_ml);
+    log.waterGoalMl = Number(row.water_goal_ml);
+  }
+
+  return logs;
 }
 
-export async function supabaseAddMultipleFoods(
-  email: string, 
-  date: string, 
-  items: FoodItem[]
-): Promise<boolean> {
-  if (!isSupabaseConfigured || items.length === 0) return false;
+export async function addFoodLog(
+  userId: string,
+  date: string,
+  item: Omit<FoodItem, 'id'>
+): Promise<ServiceResult<string>> {
+  if (!isSupabaseConfigured) return notConfigured();
 
-  const cleanEmail = email.trim().toLowerCase();
-  try {
-    const payload = items.map((item) => ({
-      id: item.id,
-      user_email: cleanEmail,
-      date,
-      name: item.name,
+  const { data, error } = await supabase
+    .from('food_logs')
+    .insert({
+      user_id: userId,
+      log_date: date,
+      meal_type: item.mealType,
+      food_name: item.name,
       portion_description: item.portionDescription,
       amount_grams: item.amountGrams,
-      calories: item.calories,
-      protein_grams: item.proteinGrams,
-      carbs_grams: item.carbsGrams,
-      fat_grams: item.fatGrams,
-      meal_type: item.mealType,
-      time_added: item.timeAdded,
-      created_at: new Date().toISOString(),
-    }));
+      calories: Math.round(item.calories),
+      protein: item.proteinGrams,
+      carbs: item.carbsGrams,
+      fat: item.fatGrams,
+    })
+    .select('id')
+    .single();
 
-    const { error } = await supabase.from('food_items').insert(payload);
-    if (error) {
-      console.error('Error bulk-inserting food items to Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception adding multiple foods to Supabase:', err);
-    return false;
+  if (error) {
+    console.error('[supabase] añadir alimento:', error.message);
+    return fail('No se pudo guardar el alimento.');
   }
+  return { success: true, data: data.id };
 }
 
-export async function supabaseRemoveFoodItem(email: string, itemId: string): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+export async function removeFoodLog(itemId: string): Promise<ServiceResult> {
+  if (!isSupabaseConfigured) return notConfigured();
 
-  const cleanEmail = email.trim().toLowerCase();
-  try {
-    const { error } = await supabase
-      .from('food_items')
-      .delete()
-      .eq('id', itemId)
-      .eq('user_email', cleanEmail);
-
-    if (error) {
-      console.error('Error removing food item from Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception removing food item from Supabase:', err);
-    return false;
+  const { error } = await supabase.from('food_logs').delete().eq('id', itemId);
+  if (error) {
+    console.error('[supabase] borrar alimento:', error.message);
+    return fail('No se pudo eliminar el alimento.');
   }
+  return { success: true };
 }
 
-export async function supabaseUpdateWater(
-  email: string, 
-  date: string, 
-  waterMl: number
-): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+export async function saveWater(
+  userId: string,
+  date: string,
+  waterMl: number,
+  waterGoalMl: number
+): Promise<ServiceResult> {
+  if (!isSupabaseConfigured) return notConfigured();
 
-  const cleanEmail = email.trim().toLowerCase();
-  try {
-    const { error } = await supabase
-      .from('water_logs')
-      .upsert({
-        id: `${cleanEmail}_${date}`,
-        user_email: cleanEmail,
-        date,
-        water_ml: waterMl,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_email,date' });
+  const { error } = await supabase.from('daily_metrics').upsert(
+    {
+      user_id: userId,
+      log_date: date,
+      water_ml: Math.max(0, waterMl),
+      water_goal_ml: waterGoalMl,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,log_date' }
+  );
 
-    if (error) {
-      console.error('Error updating water log in Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception updating water log in Supabase:', err);
-    return false;
+  if (error) {
+    console.error('[supabase] hidratación:', error.message);
+    return fail('No se pudo guardar la hidratación.');
   }
+  return { success: true };
 }
 
-// -------------------------------------------------------------
-// 3. VIP INVITATIONS (Table: vip_invitations)
-// -------------------------------------------------------------
-
-export async function supabaseFetchVipInvitations(): Promise<string[]> {
+export async function fetchTransactions(userId: string) {
   if (!isSupabaseConfigured) return [];
 
-  try {
-    const { data, error } = await supabase
-      .from('vip_invitations')
-      .select('email')
-      .eq('status', 'active');
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching VIP invitations from Supabase:', error);
-      return [];
-    }
-
-    return (data || []).map((row) => row.email.toLowerCase());
-  } catch (err) {
-    console.error('Exception fetching VIP invitations from Supabase:', err);
+  if (error) {
+    console.error('[supabase] transacciones:', error.message);
     return [];
   }
-}
-
-export async function supabaseGrantVip(
-  targetEmail: string, 
-  invitedBy: string = FOUNDER_EMAIL
-): Promise<{ success: boolean; message: string }> {
-  const cleanEmail = targetEmail.trim().toLowerCase();
-  if (!cleanEmail || !cleanEmail.includes('@')) {
-    return { success: false, message: 'Ingresa un correo electrónico válido.' };
-  }
-
-  if (!isSupabaseConfigured) {
-    return { success: false, message: 'Supabase no está configurado.' };
-  }
-
-  try {
-    // 1. Upsert into vip_invitations table
-    const { error: inviteError } = await supabase
-      .from('vip_invitations')
-      .upsert({
-        email: cleanEmail,
-        status: 'active',
-        invited_by: invitedBy,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'email' });
-
-    if (inviteError) {
-      console.error('Error saving VIP invite in Supabase:', inviteError);
-      return { success: false, message: `Error en Supabase: ${inviteError.message}` };
-    }
-
-    // 2. Update or insert in users table with tier 'vip'
-    const { data: existingUser } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', cleanEmail)
-      .maybeSingle();
-
-    if (existingUser) {
-      await supabase
-        .from('users')
-        .update({
-          tier: 'vip',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('email', cleanEmail);
-    } else {
-      await supabase
-        .from('users')
-        .insert([{
-          email: cleanEmail,
-          name: cleanEmail.split('@')[0],
-          tier: 'vip',
-          created_at: new Date().toISOString(),
-        }]);
-    }
-
-    return { 
-      success: true, 
-      message: `¡Rango VIP otorgado directamente en Supabase para ${cleanEmail}!` 
-    };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Exception granting VIP in Supabase:', err);
-    return { success: false, message: `Error al otorgar VIP en Supabase: ${message}` };
-  }
-}
-
-export async function supabaseRevokeVip(
-  targetEmail: string
-): Promise<{ success: boolean; message: string }> {
-  const cleanEmail = targetEmail.trim().toLowerCase();
-  if (isFounderEmail(cleanEmail)) {
-    return { success: false, message: 'No es posible revocar la cuenta de fundador.' };
-  }
-
-  if (!isSupabaseConfigured) {
-    return { success: false, message: 'Supabase no está configurado.' };
-  }
-
-  try {
-    // 1. Mark status as revoked in vip_invitations table
-    await supabase
-      .from('vip_invitations')
-      .update({
-        status: 'revoked',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('email', cleanEmail);
-
-    // 2. Set tier to free in users table
-    await supabase
-      .from('users')
-      .update({
-        tier: 'free',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('email', cleanEmail);
-
-    return { 
-      success: true, 
-      message: `Estatus VIP revocado exitosamente en Supabase para ${cleanEmail}.` 
-    };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Exception revoking VIP in Supabase:', err);
-    return { success: false, message: `Error al revocar VIP en Supabase: ${message}` };
-  }
-}
-
-// -------------------------------------------------------------
-// 4. TRANSACTIONS (Table: subscription_transactions)
-// -------------------------------------------------------------
-
-export async function supabaseFetchTransactions(): Promise<SubscriptionTransaction[]> {
-  if (!isSupabaseConfigured) return [];
-
-  try {
-    const { data, error } = await supabase
-      .from('subscription_transactions')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching transactions from Supabase:', error);
-      return [];
-    }
-
-    return (data || []).map((row) => ({
-      id: row.id,
-      date: row.created_at || new Date().toISOString(),
-      userEmail: row.user_email,
-      userName: row.user_name,
-      plan: row.plan as 'pro_monthly' | 'pro_annual',
-      billingCycle: row.billing_cycle as 'monthly' | 'annual',
-      amount: Number(row.amount) || 0,
-      status: (row.status as 'completed' | 'active') || 'completed',
-    }));
-  } catch (err) {
-    console.error('Exception fetching transactions from Supabase:', err);
-    return [];
-  }
-}
-
-export async function supabaseRecordTransaction(
-  tx: SubscriptionTransaction
-): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
-
-  try {
-    const { error } = await supabase
-      .from('subscription_transactions')
-      .insert([{
-        id: tx.id,
-        user_email: tx.userEmail,
-        user_name: tx.userName,
-        plan: tx.plan,
-        billing_cycle: tx.billingCycle,
-        amount: tx.amount,
-        status: tx.status || 'completed',
-        created_at: tx.date || new Date().toISOString(),
-      }]);
-
-    if (error) {
-      console.error('Error inserting transaction to Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception recording transaction in Supabase:', err);
-    return false;
-  }
+  return data ?? [];
 }
