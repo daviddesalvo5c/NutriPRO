@@ -1,4 +1,4 @@
-import { analyzeFood, AnalysisError } from './_lib/analyzeFood';
+import { analyzeFood, AnalysisError } from './_lib/analyzeFood.js';
 
 /**
  * Función serverless de Vercel para el análisis de platos.
@@ -29,10 +29,3 @@ export default async function handler(req: any, res: any) {
       .json({ error: 'Error inesperado durante el análisis.', code: 'unexpected' });
   }
 }
-
-/** El cuerpo lleva una imagen en base64; el límite por defecto de 1 MB se queda corto. */
-export const config = {
-  api: {
-    bodyParser: { sizeLimit: '4mb' },
-  },
-};

@@ -1,4 +1,4 @@
-import { searchFoods, FoodSearchError, SOURCE } from './_lib/foodSearch';
+import { searchFoods, FoodSearchError, SOURCE } from './_lib/foodSearch.js';
 
 /**
  * GET /api/foods-search?q=huevo

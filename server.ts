@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { analyzeFood, AnalysisError } from './api/_lib/analyzeFood';
-import { searchFoods, FoodSearchError, SOURCE } from './api/_lib/foodSearch';
+import { analyzeFood, AnalysisError } from './api/_lib/analyzeFood.js';
+import { searchFoods, FoodSearchError, SOURCE } from './api/_lib/foodSearch.js';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 
