@@ -131,6 +131,20 @@ export const Navbar: React.FC<NavbarProps> = ({
               Menú & Recetas
             </button>
 
+            {/* Biblioteca de Alimentos Tab */}
+            <button
+              id="nav-tab-foods"
+              onClick={() => setActiveTab('foods')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                activeTab === 'foods'
+                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs font-bold'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+              }`}
+            >
+              <Utensils className="w-3.5 h-3.5" />
+              Alimentos
+            </button>
+
             {/* Progreso & Métricas Tab */}
             <button
               id="nav-tab-progress"

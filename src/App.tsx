@@ -5,6 +5,7 @@ import { DiarySection } from './components/DiarySection';
 import { ScannerSection } from './components/ScannerSection';
 import { ProgressSection } from './components/ProgressSection';
 import { PlannerAndRecipesSection } from './components/PlannerAndRecipesSection';
+import { FoodsSection } from './components/FoodsSection';
 import { AuthView } from './components/AuthView';
 import { SubscriptionPlansModal } from './components/SubscriptionPlansModal';
 import { 
@@ -391,6 +392,14 @@ export default function App() {
             userEmail={session.email}
             currentTier={currentTier}
             onOpenPlansModal={() => setIsPlansModalOpen(true)}
+          />
+        )}
+
+        {activeTab === 'foods' && (
+          <FoodsSection
+            onAddFoodToDiary={(item, mealType) => {
+              handleAddFoodItem(selectedDate, { ...item, mealType });
+            }}
           />
         )}
 

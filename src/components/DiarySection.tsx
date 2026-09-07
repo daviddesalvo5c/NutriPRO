@@ -22,6 +22,7 @@ import {
 import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
 import { getProfileCalculations } from '../utils/nutritionCalculations';
 import { WaterTrackerCard } from './WaterTrackerCard';
+import { FoodSearchPicker } from './FoodSearchPicker';
 import { hasUserProAccess } from '../utils/storage';
 
 interface DiarySectionProps {
@@ -518,6 +519,26 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             </div>
 
             <form onSubmit={handleSaveNewFood} className="space-y-4">
+              {/* Buscar el alimento rellena los macros solo: no hay que saberlos. */}
+              <FoodSearchPicker
+                onPick={(food) => {
+                  setFoodName(food.name);
+                  setPortion(food.portionDescription);
+                  setCalories(food.calories);
+                  setProtein(food.protein);
+                  setCarbs(food.carbs);
+                  setFat(food.fat);
+                }}
+              />
+
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  o escríbelo a mano
+                </span>
+                <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800" />
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-food-name">
                   Nombre del alimento / plato *
