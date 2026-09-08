@@ -652,7 +652,7 @@ export default function App() {
 
   const handleUpdateSyncData = (
     date: string,
-    service: 'apple_health' | 'google_fit' | null,
+    service: 'google_fit' | null,
     steps: number,
     calories: number
   ) => {

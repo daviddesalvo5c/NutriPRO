@@ -171,7 +171,7 @@ export interface WorkoutItem {
 
 export interface ActivityDayLog {
   date: string; // YYYY-MM-DD
-  connectedService: 'apple_health' | 'google_fit' | null;
+  connectedService: 'google_fit' | null;
   syncedSteps: number;
   syncedCalories: number;
   lastSyncedAt?: string;

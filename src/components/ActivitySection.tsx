@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Flame, 
   Footprints, 
@@ -21,7 +21,10 @@ import {
   Clock, 
   Smartphone,
   Check,
-  AlertCircle
+  AlertCircle,
+  ExternalLink,
+  X,
+  Info
 } from 'lucide-react';
 import { 
   ActivityDayLog, 
@@ -35,6 +38,15 @@ import {
   stepsToCalories 
 } from '../utils/activityCalculations';
 import { notificationService } from '../utils/notificationService';
+import { 
+  authenticateGoogleFit, 
+  fetchGoogleFitActivity, 
+  getStoredGoogleFitToken, 
+  clearStoredGoogleFitToken,
+  getGoogleFitConfig,
+  saveGoogleFitToken,
+  GoogleFitConfig
+} from '../services/googleFitService';
 
 interface ActivitySectionProps {
   profile: UserProfile;
@@ -43,7 +55,7 @@ interface ActivitySectionProps {
   activityLogs: Record<string, ActivityDayLog>;
   onSaveWorkout: (date: string, workout: Omit<WorkoutItem, 'id' | 'date'>) => void;
   onDeleteWorkout: (date: string, workoutId: string) => void;
-  onUpdateSyncData: (date: string, service: 'apple_health' | 'google_fit' | null, steps: number, calories: number) => void;
+  onUpdateSyncData: (date: string, service: 'google_fit' | null, steps: number, calories: number) => void;
   discountCalories: boolean;
   onToggleDiscountCalories: (enabled: boolean) => void;
 }
@@ -75,6 +87,15 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [durationMinutes, setDurationMinutes] = useState<number | ''>(30);
   const [notes, setNotes] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
+  const [configInfo, setConfigInfo] = useState<GoogleFitConfig | null>(null);
+  const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
+
+  // Check stored token status on mount and date change
+  useEffect(() => {
+    const token = getStoredGoogleFitToken();
+    setHasStoredToken(Boolean(token));
+  }, [selectedDate]);
 
   // Date controls
   const handlePrevDay = () => {
@@ -133,42 +154,94 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     setNotes('');
   };
 
-  // Toggle Health / Google Fit connection simulation
-  const handleToggleHealthConnection = (service: 'apple_health' | 'google_fit') => {
+  // Real Google Fit Authentication & Data Fetch
+  const handleConnectGoogleFit = async () => {
     setIsSyncing(true);
+    try {
+      let token = getStoredGoogleFitToken();
 
-    setTimeout(() => {
-      const isCurrentlyConnected = currentDayLog.connectedService === service;
-      if (isCurrentlyConnected) {
-        // Disconnect
-        onUpdateSyncData(selectedDate, null, 0, 0);
-        notificationService.notifyInfo(`Desconectado de ${service === 'apple_health' ? 'Apple Health' : 'Google Fit'}`);
-      } else {
-        // Connect and generate realistic activity reading for the day
-        const simulatedSteps = Math.floor(5800 + Math.random() * 3400); // 5800 - 9200 steps
-        const simulatedCalories = stepsToCalories(simulatedSteps, profile.weightKg || 70);
-        onUpdateSyncData(selectedDate, service, simulatedSteps, simulatedCalories);
-        notificationService.notifySuccess(
-          `¡Conectado exitosamente con ${service === 'apple_health' ? 'Apple Health' : 'Google Fit'}! Se sincronizaron ${simulatedSteps.toLocaleString()} pasos (${simulatedCalories} kcal).`
-        );
+      if (!token) {
+        // Authenticate via OAuth 2.0 popup / Google Identity Services
+        const authRes = await authenticateGoogleFit();
+        if (!authRes.success || !authRes.accessToken) {
+          const cfg = await getGoogleFitConfig();
+          setConfigInfo(cfg);
+          if (!cfg.configured && !cfg.clientId) {
+            setShowConfigModal(true);
+          } else {
+            notificationService.notifyError(authRes.message || 'No fue posible vincular con Google Fit');
+          }
+          setIsSyncing(false);
+          return;
+        }
+        token = authRes.accessToken;
+        setHasStoredToken(true);
       }
+
+      // Fetch real steps and active calories from Google Fitness REST API
+      const result = await fetchGoogleFitActivity(selectedDate, token);
+      onUpdateSyncData(selectedDate, 'google_fit', result.steps, result.calories);
+      setHasStoredToken(true);
+      notificationService.notifySuccess(
+        `¡Google Fit conectado! ${result.steps.toLocaleString()} pasos y ${result.calories} kcal activas obtenidas de la Google Fitness API.`
+      );
+    } catch (err: any) {
+      if (err.message === 'TOKEN_EXPIRED' || err.message === 'NO_TOKEN') {
+        clearStoredGoogleFitToken();
+        setHasStoredToken(false);
+        notificationService.notifyInfo('La sesión de Google Fit expiró. Por favor haz clic para autorizar nuevamente.');
+      } else {
+        notificationService.notifyError(err.message || 'Error al conectar con la API de Google Fit');
+      }
+    } finally {
       setIsSyncing(false);
-    }, 600);
+    }
   };
 
-  // Re-sync button
-  const handleManualSyncNow = () => {
-    if (!currentDayLog.connectedService) return;
+  const handleDisconnectGoogleFit = () => {
+    clearStoredGoogleFitToken();
+    setHasStoredToken(false);
+    onUpdateSyncData(selectedDate, null, 0, 0);
+    notificationService.notifyInfo('Google Fit desconectado.');
+  };
+
+  // Re-sync button using Google Fitness REST API
+  const handleManualSyncNow = async () => {
     setIsSyncing(true);
-    setTimeout(() => {
-      const current = currentDayLog.syncedSteps || 6000;
-      const additional = Math.floor(350 + Math.random() * 850);
-      const newSteps = current + additional;
-      const newCalories = stepsToCalories(newSteps, profile.weightKg || 70);
-      onUpdateSyncData(selectedDate, currentDayLog.connectedService, newSteps, newCalories);
+    try {
+      const token = getStoredGoogleFitToken();
+      if (!token) {
+        await handleConnectGoogleFit();
+        return;
+      }
+
+      const result = await fetchGoogleFitActivity(selectedDate, token);
+      onUpdateSyncData(selectedDate, 'google_fit', result.steps, result.calories);
+      notificationService.notifySuccess(
+        `Datos de Google Fit actualizados: ${result.steps.toLocaleString()} pasos y ${result.calories} kcal activas.`
+      );
+    } catch (err: any) {
+      if (err.message === 'TOKEN_EXPIRED') {
+        clearStoredGoogleFitToken();
+        setHasStoredToken(false);
+        notificationService.notifyInfo('Token de Google Fit expirado. Por favor reconecta tu cuenta.');
+      } else {
+        notificationService.notifyError(err.message || 'Error al sincronizar con Google Fit');
+      }
+    } finally {
       setIsSyncing(false);
-      notificationService.notifySuccess(`Sincronización al día: +${additional} pasos detectados.`);
-    }, 500);
+    }
+  };
+
+  // Quick simulated sync fallback for testing when Google Cloud Console is pending approval
+  const handleSimulateTestingData = () => {
+    const testSteps = Math.floor(6500 + Math.random() * 2500);
+    const testCalories = stepsToCalories(testSteps, profile.weightKg || 70);
+    onUpdateSyncData(selectedDate, 'google_fit', testSteps, testCalories);
+    notificationService.notifySuccess(
+      `Modo Prueba Activo: Sincronizados ${testSteps.toLocaleString()} pasos (${testCalories} kcal) para verificar el descuento calórico.`
+    );
+    setShowConfigModal(false);
   };
 
   const getWorkoutIcon = (type: WorkoutCategory) => {
@@ -327,11 +400,12 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             </div>
             <div className="text-[11px] text-zinc-400 mt-2">
               {currentDayLog.connectedService ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                  Sincronizado vía {currentDayLog.connectedService === 'apple_health' ? 'Apple Health' : 'Google Fit'}
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                  Sincronizado vía Google Fit (REST API)
                 </span>
               ) : (
-                <span>Conecta tu app de salud para conteo en vivo</span>
+                <span>Conecta Google Fit para importar tus pasos diarios</span>
               )}
             </div>
           </div>
@@ -386,7 +460,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         </div>
       </div>
 
-      {/* 3. SECCIÓN: INTEGRACIÓN AUTOMÁTICA (APPLE HEALTH / GOOGLE FIT) */}
+      {/* 3. SECCIÓN: INTEGRACIÓN REAL CON GOOGLE FIT (REST API) */}
       <div 
         id="activity-health-integration-card"
         className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs"
@@ -394,117 +468,144 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-zinc-100 dark:border-zinc-800">
           <div>
             <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold mb-1.5">
-              <Smartphone className="w-3.5 h-3.5" />
-              <span>Sincronización Biométrica</span>
+              <HeartPulse className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Sincronización Biométrica Real</span>
             </div>
-            <h3 className="text-lg font-black text-zinc-900 dark:text-white">
-              Conexión Automática con Apple Health / Google Fit
+            <h3 className="text-lg font-black text-zinc-900 dark:text-white flex items-center gap-2">
+              <span>Google Fit (Google Fitness REST API)</span>
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-              Vincula la aplicación para importar automáticamente tus pasos diarios, frecuencia cardíaca y calorías activas quemadas.
+              Conexión OAuth 2.0 oficial con la API de Google Fitness para importar automáticamente tus pasos reales y calorías activas quemadas.
             </p>
           </div>
 
-          {currentDayLog.connectedService && (
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              id="activity-btn-sync-now"
-              onClick={handleManualSyncNow}
-              disabled={isSyncing}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-all active:scale-95 disabled:opacity-60"
+              onClick={() => {
+                getGoogleFitConfig().then((cfg) => {
+                  setConfigInfo(cfg);
+                  setShowConfigModal(true);
+                });
+              }}
+              className="px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 hover:bg-zinc-100 text-zinc-700 dark:text-zinc-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+              title="Información de conexión y OAuth"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar ahora'}</span>
+              <Info className="w-3.5 h-3.5 text-zinc-500" />
+              <span>Configuración</span>
             </button>
-          )}
+
+            {currentDayLog.connectedService === 'google_fit' && (
+              <button
+                type="button"
+                id="activity-btn-sync-now"
+                onClick={handleManualSyncNow}
+                disabled={isSyncing}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-all active:scale-95 disabled:opacity-60"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Leyendo API...' : 'Sincronizar ahora'}</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Integration Badges / Action Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5">
-          {/* Apple Health Card */}
-          <div className={`p-4 rounded-2xl border transition-all ${
-            currentDayLog.connectedService === 'apple_health'
-              ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500 ring-1 ring-emerald-500/40'
-              : 'bg-zinc-50/60 dark:bg-zinc-800/40 border-zinc-200 dark:border-zinc-800'
-          }`}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-black text-white flex items-center justify-center font-bold text-lg shadow-sm">
-                  
-                </div>
-                <div>
-                  <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Apple Health</h4>
-                  <p className="text-[11px] text-zinc-500">iOS & Apple Watch</p>
-                </div>
-              </div>
-              {currentDayLog.connectedService === 'apple_health' && (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-bold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" />
-                  Activo
-                </span>
-              )}
-            </div>
-
-            <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-4">
-              Lee pasos, anillo de movimiento y calorías activas calculadas por los sensores de Apple Watch y iPhone.
-            </p>
-
-            <button
-              type="button"
-              id="btn-connect-apple-health"
-              onClick={() => handleToggleHealthConnection('apple_health')}
-              disabled={isSyncing}
-              className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                currentDayLog.connectedService === 'apple_health'
-                  ? 'bg-zinc-200 dark:bg-zinc-700 hover:bg-rose-100 hover:text-rose-700 text-zinc-700 dark:text-zinc-200'
-                  : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:bg-zinc-800'
-              }`}
-            >
-              {currentDayLog.connectedService === 'apple_health' ? 'Desconectar Apple Health' : 'Vincular Apple Health'}
-            </button>
-          </div>
-
-          {/* Google Fit Card */}
-          <div className={`p-4 rounded-2xl border transition-all ${
+        {/* Google Fit Integration Panel */}
+        <div className="mt-5">
+          <div className={`p-5 rounded-2xl border transition-all ${
             currentDayLog.connectedService === 'google_fit'
               ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500 ring-1 ring-emerald-500/40'
-              : 'bg-zinc-50/60 dark:bg-zinc-800/40 border-zinc-200 dark:border-zinc-800'
+              : 'bg-zinc-50/70 dark:bg-zinc-800/40 border-zinc-200 dark:border-zinc-800'
           }`}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 via-green-500 to-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-sm">
-                  <HeartPulse className="w-5 h-5 text-white" />
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs">
+                  <HeartPulse className="w-6 h-6 text-emerald-500" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Google Fit</h4>
-                  <p className="text-[11px] text-zinc-500">Android & Wear OS</p>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-sm sm:text-base text-zinc-900 dark:text-zinc-100">
+                      Google Fitness API
+                    </h4>
+                    {currentDayLog.connectedService === 'google_fit' ? (
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-black flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Conectado en Vivo
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold">
+                        No Vinculado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                    {currentDayLog.connectedService === 'google_fit'
+                      ? `Lectura activa de pasos y calorías de hoy (${selectedDate}). Los datos se descuentan de tu meta calórica.`
+                      : 'Vincula tu cuenta de Google para sincronizar pasos y calorías activas automáticamente.'}
+                  </p>
                 </div>
               </div>
-              {currentDayLog.connectedService === 'google_fit' && (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-bold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" />
-                  Activo
-                </span>
-              )}
+
+              <div className="flex items-center gap-2">
+                {currentDayLog.connectedService === 'google_fit' ? (
+                  <>
+                    <button
+                      type="button"
+                      id="btn-disconnect-google-fit"
+                      onClick={handleDisconnectGoogleFit}
+                      disabled={isSyncing}
+                      className="px-4 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 transition-all"
+                    >
+                      Desconectar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleManualSyncNow}
+                      disabled={isSyncing}
+                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 active:scale-95 disabled:opacity-60"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? 'Actualizando...' : 'Actualizar Pasos'}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    id="btn-connect-google-fit"
+                    onClick={handleConnectGoogleFit}
+                    disabled={isSyncing}
+                    className="w-full sm:w-auto py-2.5 px-5 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60"
+                  >
+                    <HeartPulse className="w-4 h-4 text-emerald-100" />
+                    <span>{isSyncing ? 'Abriendo Google OAuth...' : 'Vincular Google Fit'}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
-            <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-4">
-              Sincroniza puntos de cardio, podómetro y entrenamientos registrados en cualquier dispositivo Android.
-            </p>
-
-            <button
-              type="button"
-              id="btn-connect-google-fit"
-              onClick={() => handleToggleHealthConnection('google_fit')}
-              disabled={isSyncing}
-              className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                currentDayLog.connectedService === 'google_fit'
-                  ? 'bg-zinc-200 dark:bg-zinc-700 hover:bg-rose-100 hover:text-rose-700 text-zinc-700 dark:text-zinc-200'
-                  : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-              }`}
-            >
-              {currentDayLog.connectedService === 'google_fit' ? 'Desconectar Google Fit' : 'Vincular Google Fit'}
-            </button>
+            {/* Live synced stats summary */}
+            {currentDayLog.connectedService === 'google_fit' && (
+              <div className="mt-4 pt-3 border-t border-emerald-500/20 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Pasos Reales</span>
+                  <p className="text-base font-black text-zinc-900 dark:text-zinc-100 mt-0.5">
+                    {totalSteps.toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Calorías Activas</span>
+                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    {syncedCalories} kcal
+                  </p>
+                </div>
+                <div className="col-span-2 sm:col-span-1 bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Estado en Descuento</span>
+                  <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mt-1">
+                    {discountCalories ? '✓ Sumado al descuento' : 'Desactivado en Ajustes'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -638,7 +739,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
               No hay entrenamientos registrados para este día
             </p>
             <p className="text-xs text-zinc-400 mt-1 max-w-sm mx-auto">
-              Utiliza el formulario de arriba para añadir una sesión de ejercicio o conecta Apple Health / Google Fit.
+              Utiliza el formulario de arriba para añadir una sesión de ejercicio o vincula Google Fit para sincronización automática.
             </p>
           </div>
         ) : (
@@ -691,6 +792,101 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
           </div>
         )}
       </div>
+
+      {/* MODAL: CONFIGURACIÓN Y CREDENCIALES DE GOOGLE FIT */}
+      {showConfigModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowConfigModal(false)}
+              className="absolute top-5 right-5 p-1.5 rounded-xl text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 flex items-center justify-center">
+                <HeartPulse className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">
+                  Google Fitness REST API
+                </h3>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Guía de configuración OAuth 2.0 y sincronización
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3.5 text-xs text-zinc-600 dark:text-zinc-400">
+              <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700/80">
+                <span className="font-bold text-zinc-900 dark:text-zinc-200 block mb-1">
+                  1. Estado de las credenciales
+                </span>
+                <p>
+                  {configInfo?.configured ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Client ID de Google configurado en el servidor
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400 font-medium">
+                      El servidor requiere <code>GOOGLE_CLIENT_ID</code> en las variables de entorno para abrir el popup de Google directamente.
+                    </span>
+                  )}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700/80">
+                <span className="font-bold text-zinc-900 dark:text-zinc-200 block mb-1">
+                  2. Parámetros para Google Cloud Console
+                </span>
+                <div className="space-y-1.5 mt-2 font-mono text-[11px]">
+                  <div>
+                    <span className="text-zinc-400 block text-[10px] font-sans">Redirect URI autorizado:</span>
+                    <code className="p-1 rounded bg-zinc-200 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-200 break-all block">
+                      {window.location.origin}/auth/callback
+                    </code>
+                  </div>
+                  <div className="mt-1">
+                    <span className="text-zinc-400 block text-[10px] font-sans">Permisos (Scopes) solicitados:</span>
+                    <code className="p-1 rounded bg-zinc-200 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-200 break-all block text-[10px]">
+                      https://www.googleapis.com/auth/fitness.activity.read
+                    </code>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50">
+                <span className="font-bold text-emerald-800 dark:text-emerald-300 block mb-1">
+                  3. ¿Quieres probar la integración calórica ahora mismo?
+                </span>
+                <p className="text-emerald-700 dark:text-emerald-400 mb-2">
+                  Puedes inyectar una lectura de prueba para comprobar cómo se descuentan los pasos y calorías activas automáticamente de tu meta diaria.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSimulateTestingData}
+                  className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs transition-all shadow-xs"
+                >
+                  Probar con Datos Demo (8.000 pasos / ~280 kcal)
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(false)}
+                className="px-4 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

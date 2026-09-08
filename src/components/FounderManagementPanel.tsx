@@ -68,26 +68,20 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
   const [userSearchQuery, setUserSearchQuery] = useState<string>('');
   const [planFilter, setPlanFilter] = useState<'all' | 'vip' | 'pro' | 'free'>('all');
 
-  // Load real data from Supabase or fallback
+  // Load real data from Supabase (profiles) or fallback
   const refreshData = async () => {
     setIsRefreshing(true);
     try {
-      if (isSupabaseConfigured) {
-        const [remoteUsers, remoteTxs] = await Promise.all([
-          supabaseFetchRegisteredUsers(),
-          supabaseFetchTransactions(),
-        ]);
-        if (remoteUsers && remoteUsers.length > 0) {
-          setUsers(remoteUsers);
-          setIsDbLive(true);
-        } else {
-          setUsers(loadRegisteredUsers());
-        }
-        setTransactions(remoteTxs || []);
+      // Fetch directly through founder service_role endpoint which queries Supabase profiles bypassing RLS
+      const remoteUsers = await supabaseFetchRegisteredUsers(currentUserEmail);
+      const remoteTxs = isSupabaseConfigured ? await supabaseFetchTransactions() : [];
+      if (remoteUsers && remoteUsers.length > 0) {
+        setUsers(remoteUsers);
+        setIsDbLive(true);
       } else {
         setUsers(loadRegisteredUsers());
-        setTransactions(loadTransactions());
       }
+      setTransactions(remoteTxs || []);
     } catch (err) {
       console.error('Error refreshing founder data:', err);
       setUsers(loadRegisteredUsers());
@@ -99,11 +93,12 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
 
   useEffect(() => {
     refreshData();
-  }, []);
+  }, [currentUserEmail]);
 
   const handleGrantVip = async (email: string) => {
-    if (isSupabaseConfigured) {
-      const res = await supabaseGrantVip(email);
+    setIsRefreshing(true);
+    try {
+      const res = await supabaseGrantVip(email, currentUserEmail);
       grantVipToUser(email);
       if (res.success) {
         setNotification({ type: 'success', message: res.message });
@@ -112,22 +107,16 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
       } else {
         setNotification({ type: 'error', message: res.message });
       }
-    } else {
-      const res = grantVipToUser(email);
-      if (res.success) {
-        setNotification({ type: 'success', message: res.message });
-        setNewVipEmail('');
-        refreshData();
-      } else {
-        setNotification({ type: 'error', message: res.message });
-      }
+    } finally {
+      setIsRefreshing(false);
     }
     setTimeout(() => setNotification(null), 4000);
   };
 
   const handleRevokeVip = async (email: string) => {
-    if (isSupabaseConfigured) {
-      const res = await supabaseRevokeVip(email);
+    setIsRefreshing(true);
+    try {
+      const res = await supabaseRevokeVip(email, currentUserEmail);
       revokeVipFromUser(email);
       if (res.success) {
         setNotification({ type: 'success', message: res.message });
@@ -135,14 +124,8 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
       } else {
         setNotification({ type: 'error', message: res.message });
       }
-    } else {
-      const res = revokeVipFromUser(email);
-      if (res.success) {
-        setNotification({ type: 'success', message: res.message });
-        refreshData();
-      } else {
-        setNotification({ type: 'error', message: res.message });
-      }
+    } finally {
+      setIsRefreshing(false);
     }
     setTimeout(() => setNotification(null), 4000);
   };
@@ -456,15 +439,32 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
           <div>
             <h3 className="text-base font-extrabold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
               <Users className="w-4 h-4 text-emerald-600" />
-              <span>Directorio de Cuentas y Rango de Membresía</span>
+              <span>Directorio de Usuarios Registrados (Supabase profiles)</span>
             </h3>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              {filteredUsers.length} de {users.length} cuentas registradas
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold border border-emerald-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                Service Role (Bypass RLS)
+              </span>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {filteredUsers.length} de {users.length} cuentas registradas
+              </p>
+            </div>
           </div>
 
-          {/* Search and filter controls */}
+          {/* Search, filter controls & reload */}
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={refreshData}
+              disabled={isRefreshing}
+              className="p-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 disabled:opacity-50"
+              title="Recargar usuarios desde Supabase"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-emerald-600' : ''}`} />
+              <span className="hidden sm:inline">Actualizar</span>
+            </button>
+
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input

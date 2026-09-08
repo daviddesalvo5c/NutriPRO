@@ -831,6 +831,364 @@ app.post('/api/sync/code/redeem', (req, res) => {
 });
 
 // ============================================================================
+// FOUNDER MANAGEMENT PANEL (Supabase Service Role - RLS Bypass API)
+// ============================================================================
+const FOUNDER_PRIMARY_EMAIL = 'daviddesalvo.5c@gmail.com';
+
+// 1. Fetch all registered users from Supabase profiles (Service Role / Bypass RLS)
+app.get('/api/founder/users', async (req, res) => {
+  try {
+    const requester = ((req.query.requester as string) || (req.headers['x-requester-email'] as string) || '').trim().toLowerCase();
+    
+    // Verify requester is the founder
+    if (requester !== FOUNDER_PRIMARY_EMAIL) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Acceso exclusivo y restringido a la cuenta del fundador.' 
+      });
+    }
+
+    // A. Query Supabase profiles directly with service_role key (bypasses RLS)
+    const { data: profiles, error: pErr } = await supabaseServer
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (pErr) {
+      console.warn('[Founder Users] Notice querying profiles with service role:', pErr.message);
+    }
+
+    // B. Query transactions to cross-check real-time active paid plans
+    const { data: txList } = await supabaseServer
+      .from('transactions')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    const txPlanMap: Record<string, string> = {};
+    if (txList) {
+      for (const tx of txList) {
+        const e = (tx.user_email || '').toLowerCase().trim();
+        if (e && !txPlanMap[e]) {
+          txPlanMap[e] = tx.plan || tx.plan_type || 'pro_monthly';
+        }
+      }
+    }
+
+    // C. Aggregate profiles from Supabase and any users in local sync database
+    const userMap: Record<string, any> = {};
+
+    if (profiles && profiles.length > 0) {
+      for (const p of profiles) {
+        const email = (p.email || '').trim().toLowerCase();
+        if (!email) continue;
+        const isFounder = email === FOUNDER_PRIMARY_EMAIL || Boolean(p.is_founder);
+        const latestTxPlan = txPlanMap[email];
+        const tier = isFounder ? 'vip' : (latestTxPlan || p.subscription_plan || 'free');
+
+        userMap[email] = {
+          id: p.id,
+          email,
+          name: p.full_name || email.split('@')[0],
+          tier,
+          isFounder,
+          createdAt: p.created_at || p.updated_at || new Date().toISOString(),
+          updatedAt: p.updated_at || p.created_at || new Date().toISOString(),
+          weightKg: p.weight_kg ? Number(p.weight_kg) : undefined,
+          targetCalories: p.target_calories ? Number(p.target_calories) : undefined,
+          goal: p.goal || undefined,
+          source: 'supabase_profiles',
+        };
+      }
+    }
+
+    // Merge any locally registered users
+    for (const [email, u] of Object.entries(db.users)) {
+      const clean = email.toLowerCase().trim();
+      const isFounder = clean === FOUNDER_PRIMARY_EMAIL || Boolean(u.isFounder);
+      if (!userMap[clean]) {
+        userMap[clean] = {
+          id: emailToUuid(clean),
+          email: clean,
+          name: u.name || clean.split('@')[0],
+          tier: isFounder ? 'vip' : (u.tier || 'free'),
+          isFounder,
+          createdAt: u.createdAt || new Date().toISOString(),
+          updatedAt: u.createdAt || new Date().toISOString(),
+          source: 'cloud_sync_db',
+        };
+      } else {
+        if (u.name && (!userMap[clean].name || userMap[clean].name === clean.split('@')[0])) {
+          userMap[clean].name = u.name;
+        }
+        if (isFounder) userMap[clean].tier = 'vip';
+      }
+    }
+
+    // Sort: Founder first, then newest accounts first
+    const allUsers = Object.values(userMap).sort((a: any, b: any) => {
+      if (a.isFounder && !b.isFounder) return -1;
+      if (!a.isFounder && b.isFounder) return 1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    return res.json({
+      success: true,
+      totalCount: allUsers.length,
+      users: allUsers,
+      supabaseProfilesFound: profiles?.length || 0,
+    });
+  } catch (err: any) {
+    console.error('[Founder Users] Error fetching profiles:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error al obtener usuarios' });
+  }
+});
+
+// 2. Grant VIP status via Service Role
+app.post('/api/founder/users/grant-vip', async (req, res) => {
+  try {
+    const { targetEmail, requesterEmail } = req.body;
+    const requester = (requesterEmail || '').toLowerCase().trim();
+    if (requester !== FOUNDER_PRIMARY_EMAIL) {
+      return res.status(403).json({ success: false, message: 'Acceso no autorizado' });
+    }
+    const clean = (targetEmail || '').toLowerCase().trim();
+    if (!clean) return res.status(400).json({ success: false, message: 'Email requerido' });
+
+    // Update Supabase profiles table
+    await supabaseServer
+      .from('profiles')
+      .update({ subscription_plan: 'vip', updated_at: new Date().toISOString() })
+      .eq('email', clean);
+
+    // Update local cache
+    if (db.users[clean]) db.users[clean].tier = 'vip';
+    if (db.userData[clean]) db.userData[clean].tier = 'vip';
+    saveSyncDatabase(db);
+
+    return res.json({ success: true, message: `Rango VIP otorgado exitosamente a ${clean}` });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 3. Revoke VIP status via Service Role
+app.post('/api/founder/users/revoke-vip', async (req, res) => {
+  try {
+    const { targetEmail, requesterEmail } = req.body;
+    const requester = (requesterEmail || '').toLowerCase().trim();
+    if (requester !== FOUNDER_PRIMARY_EMAIL) {
+      return res.status(403).json({ success: false, message: 'Acceso no autorizado' });
+    }
+    const clean = (targetEmail || '').toLowerCase().trim();
+    if (clean === FOUNDER_PRIMARY_EMAIL) {
+      return res.status(400).json({ success: false, message: 'No es posible revocar el rango al fundador.' });
+    }
+
+    // Update Supabase profiles table
+    await supabaseServer
+      .from('profiles')
+      .update({ subscription_plan: 'free', updated_at: new Date().toISOString() })
+      .eq('email', clean);
+
+    // Update local cache
+    if (db.users[clean]) db.users[clean].tier = 'free';
+    if (db.userData[clean]) db.userData[clean].tier = 'free';
+    saveSyncDatabase(db);
+
+    return res.json({ success: true, message: `Rango VIP revocado para ${clean}` });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================================
+// GOOGLE FIT OAUTH2 & FITNESS REST API INTEGRATION
+// ============================================================================
+const GOOGLE_FIT_SCOPES = [
+  'https://www.googleapis.com/auth/fitness.activity.read',
+  'https://www.googleapis.com/auth/fitness.body.read',
+  'https://www.googleapis.com/auth/userinfo.profile',
+].join(' ');
+
+// 1. Config status and redirect URI for Google Fit OAuth
+app.get('/api/google-fit/config', (req, res) => {
+  const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  const redirectUri = `${appUrl}/auth/callback`;
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+  res.json({
+    configured: Boolean(clientId),
+    clientId,
+    redirectUri,
+    scopes: GOOGLE_FIT_SCOPES,
+  });
+});
+
+// 2. Generate Google OAuth authorization URL
+app.get('/api/google-fit/auth-url', (req, res) => {
+  const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  const redirectUri = `${appUrl}/auth/callback`;
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+
+  if (!clientId) {
+    return res.json({
+      configured: false,
+      message: 'GOOGLE_CLIENT_ID no configurado en variables de entorno.',
+      redirectUri,
+    });
+  }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'token',
+    scope: GOOGLE_FIT_SCOPES,
+    include_granted_scopes: 'true',
+    prompt: 'consent',
+  });
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  return res.json({ configured: true, authUrl, redirectUri });
+});
+
+// 3. Callback route for Google OAuth popup
+app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+  <head>
+    <title>Google Fit Conexión</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #09090b; color: #f4f4f5; text-align: center; }
+      .card { background: #18181b; padding: 2rem; border-radius: 1.25rem; border: 1px solid #27272a; max-width: 380px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); margin: 1rem; }
+      .spinner { width: 38px; height: 38px; border: 3px solid #27272a; border-top-color: #10b981; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 1.25rem; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      h3 { margin: 0 0 0.5rem; font-size: 1.15rem; font-weight: 700; color: #fff; }
+      p { font-size: 0.85rem; color: #a1a1aa; line-height: 1.4; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="spinner"></div>
+      <h3>Sincronizando con Google Fit</h3>
+      <p>Verificando credenciales seguras. Esta ventana se cerrará automáticamente en unos segundos...</p>
+    </div>
+    <script>
+      (function() {
+        try {
+          const hash = window.location.hash ? window.location.hash.substring(1) : '';
+          const hashParams = new URLSearchParams(hash);
+          const accessToken = hashParams.get('access_token');
+
+          const queryParams = new URLSearchParams(window.location.search);
+          const code = queryParams.get('code');
+          const error = queryParams.get('error') || hashParams.get('error');
+
+          const payload = {
+            type: 'GOOGLE_FIT_AUTH_RESULT',
+            success: !error && Boolean(accessToken || code),
+            accessToken: accessToken || null,
+            code: code || null,
+            error: error || null,
+          };
+
+          if (window.opener) {
+            window.opener.postMessage(payload, '*');
+            setTimeout(function() { window.close(); }, 500);
+          } else {
+            window.location.href = '/';
+          }
+        } catch(e) {
+          console.error(e);
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+});
+
+// 4. Fetch real activity from Google Fitness REST API (dataset:aggregate)
+app.post('/api/google-fit/activity', async (req, res) => {
+  try {
+    const { accessToken, date } = req.body;
+    if (!accessToken) {
+      return res.status(400).json({ success: false, message: 'Access token de Google Fit requerido.' });
+    }
+
+    const targetDateStr = date || new Date().toISOString().split('T')[0];
+    const startDate = new Date(`${targetDateStr}T00:00:00.000`);
+    const endDate = new Date(`${targetDateStr}T23:59:59.999`);
+
+    const startTimeMillis = startDate.getTime();
+    const endTimeMillis = endDate.getTime();
+
+    // Call Google Fitness REST API aggregate endpoint
+    const fitnessResponse = await fetch('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        aggregateBy: [
+          { dataTypeName: 'com.google.step_count.delta' },
+          { dataTypeName: 'com.google.calories.expended' },
+        ],
+        bucketByTime: { durationMillis: 86400000 },
+        startTimeMillis,
+        endTimeMillis,
+      }),
+    });
+
+    if (!fitnessResponse.ok) {
+      const errText = await fitnessResponse.text();
+      console.warn('[Google Fit API Error]:', fitnessResponse.status, errText);
+      return res.status(fitnessResponse.status).json({
+        success: false,
+        message: `Error en Google Fitness API (${fitnessResponse.status})`,
+        details: errText,
+      });
+    }
+
+    const fitData = await fitnessResponse.json();
+    let totalSteps = 0;
+    let totalCalories = 0;
+
+    if (fitData.bucket && fitData.bucket.length > 0) {
+      for (const b of fitData.bucket) {
+        if (b.dataset) {
+          for (const ds of b.dataset) {
+            if (ds.point) {
+              for (const pt of ds.point) {
+                if (pt.dataTypeName === 'com.google.step_count.delta') {
+                  const val = pt.value?.[0]?.intVal ?? pt.value?.[0]?.fpVal ?? 0;
+                  totalSteps += Math.round(Number(val));
+                } else if (pt.dataTypeName === 'com.google.calories.expended') {
+                  const cal = pt.value?.[0]?.fpVal ?? pt.value?.[0]?.intVal ?? 0;
+                  totalCalories += Math.round(Number(cal));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      date: targetDateStr,
+      steps: totalSteps,
+      calories: totalCalories,
+      source: 'google_fitness_api',
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('[Google Fit Handler Error]:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error al conectar con Google Fit' });
+  }
+});
+
+// ============================================================================
 // MERCADO PAGO INTEGRATION & SECURE POST-PAYMENT ACTIVATION (Backend / Service Role)
 // ============================================================================
 

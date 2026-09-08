@@ -294,45 +294,52 @@ export async function supabaseRegister(
   }
 }
 
-export async function supabaseFetchRegisteredUsers(): Promise<AuthUser[]> {
+export async function supabaseFetchRegisteredUsers(
+  requesterEmail: string = FOUNDER_EMAIL
+): Promise<AuthUser[]> {
+  try {
+    // Primary path: Use the server-side bypass API which uses SUPABASE_SERVICE_ROLE_KEY
+    // to query all rows from the profiles table without RLS restrictions
+    const response = await fetch(`/api/founder/users?requester=${encodeURIComponent(requesterEmail)}`);
+    if (response.ok) {
+      const result = await response.json();
+      if (result.success && Array.isArray(result.users)) {
+        return result.users.map((row: any) => ({
+          email: row.email,
+          name: row.name || row.email.split('@')[0],
+          isFounder: Boolean(row.isFounder || isFounderEmail(row.email)),
+          tier: (row.tier as SubscriptionTier) || (isFounderEmail(row.email) ? 'vip' : 'free'),
+          createdAt: row.createdAt || new Date().toISOString(),
+          subscribedAt: row.subscribedAt,
+        }));
+      }
+    }
+  } catch (apiErr) {
+    console.warn('Notice querying /api/founder/users:', apiErr);
+  }
+
   if (!isSupabaseConfigured) return [];
 
   try {
-    const { data: usersData, error: usersError } = await supabase
-      .from('users')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (!usersError && usersData) {
-      return usersData.map((row) => ({
-        email: row.email,
-        name: row.name,
-        isFounder: Boolean(row.is_founder || isFounderEmail(row.email)),
-        tier: (row.tier as SubscriptionTier) || (isFounderEmail(row.email) ? 'vip' : 'free'),
-        subscribedAt: row.subscribed_at,
-        createdAt: row.created_at || new Date().toISOString(),
-      }));
-    }
-
-    // Fallback to profiles table
+    // Secondary fallback: Direct Supabase client
     const { data: profilesData, error: profError } = await supabase
       .from('profiles')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (!profError && profilesData) {
-      return profilesData.map((row) => ({
+      return profilesData.map((row: any) => ({
         email: row.email,
         name: row.full_name || row.email.split('@')[0],
         isFounder: Boolean(row.is_founder || isFounderEmail(row.email)),
-        tier: isFounderEmail(row.email) ? 'vip' : 'free',
+        tier: (row.subscription_plan as SubscriptionTier) || (isFounderEmail(row.email) ? 'vip' : 'free'),
         createdAt: row.created_at || new Date().toISOString(),
       }));
     }
 
     return [];
   } catch (err) {
-    console.warn('Notice fetching users from Supabase:', err);
+    console.warn('Notice fetching users from Supabase client fallback:', err);
     return [];
   }
 }
@@ -743,6 +750,21 @@ export async function supabaseGrantVip(
     return { success: false, message: 'Ingresa un correo electrónico válido.' };
   }
 
+  // 1. First attempt via founder service role server endpoint
+  try {
+    const res = await fetch('/api/founder/users/grant-vip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetEmail: cleanEmail, requesterEmail: invitedBy }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, message: data.message || `Rango VIP otorgado a ${cleanEmail}` };
+    }
+  } catch (apiErr) {
+    console.warn('Notice calling /api/founder/users/grant-vip:', apiErr);
+  }
+
   if (!isSupabaseConfigured) {
     return { success: false, message: 'Supabase no está configurado.' };
   }
@@ -758,12 +780,12 @@ export async function supabaseGrantVip(
         updated_at: new Date().toISOString(),
       }, { onConflict: 'email' });
 
-    // 2. Update users table or profiles table
+    // 2. Update profiles table
     try {
       await supabase
-        .from('users')
+        .from('profiles')
         .update({
-          tier: 'vip',
+          subscription_plan: 'vip',
           updated_at: new Date().toISOString(),
         })
         .eq('email', cleanEmail);
@@ -783,11 +805,27 @@ export async function supabaseGrantVip(
 }
 
 export async function supabaseRevokeVip(
-  targetEmail: string
+  targetEmail: string,
+  requesterEmail: string = FOUNDER_EMAIL
 ): Promise<{ success: boolean; message: string }> {
   const cleanEmail = targetEmail.trim().toLowerCase();
   if (isFounderEmail(cleanEmail)) {
     return { success: false, message: 'No es posible revocar la cuenta de fundador.' };
+  }
+
+  // 1. First attempt via founder service role server endpoint
+  try {
+    const res = await fetch('/api/founder/users/revoke-vip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetEmail: cleanEmail, requesterEmail }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, message: data.message || `Rango VIP revocado para ${cleanEmail}` };
+    }
+  } catch (apiErr) {
+    console.warn('Notice calling /api/founder/users/revoke-vip:', apiErr);
   }
 
   if (!isSupabaseConfigured) {
@@ -804,12 +842,12 @@ export async function supabaseRevokeVip(
       })
       .eq('email', cleanEmail);
 
-    // 2. Set tier to free in users table
+    // 2. Set subscription_plan to free in profiles table
     try {
       await supabase
-        .from('users')
+        .from('profiles')
         .update({
-          tier: 'free',
+          subscription_plan: 'free',
           updated_at: new Date().toISOString(),
         })
         .eq('email', cleanEmail);
