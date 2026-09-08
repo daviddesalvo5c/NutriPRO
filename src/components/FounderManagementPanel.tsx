@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Crown, 
@@ -15,7 +15,9 @@ import {
   Sparkles,
   ArrowUpRight,
   Filter,
-  BarChart2
+  BarChart2,
+  RefreshCw,
+  Database
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -31,10 +33,17 @@ import {
   loadTransactions, 
   grantVipToUser, 
   revokeVipFromUser, 
-  recordTransaction,
   FOUNDER_EMAIL,
   isFounderEmail
 } from '../utils/storage';
+import {
+  supabaseFetchRegisteredUsers,
+  supabaseFetchTransactions,
+  supabaseGrantVip,
+  supabaseRevokeVip,
+  isSupabaseConfigured,
+  checkSupabaseHealth
+} from '../services/supabaseService';
 
 interface FounderManagementPanelProps {
   currentUserEmail: string;
@@ -50,6 +59,8 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
 
   const [users, setUsers] = useState<AuthUser[]>(() => loadRegisteredUsers());
   const [transactions, setTransactions] = useState<SubscriptionTransaction[]>(() => loadTransactions());
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [isDbLive, setIsDbLive] = useState<boolean>(isSupabaseConfigured);
   
   // VIP invitation form
   const [newVipEmail, setNewVipEmail] = useState<string>('');
@@ -57,49 +68,83 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
   const [userSearchQuery, setUserSearchQuery] = useState<string>('');
   const [planFilter, setPlanFilter] = useState<'all' | 'vip' | 'pro' | 'free'>('all');
 
-  // Refresh data
-  const refreshData = () => {
-    setUsers(loadRegisteredUsers());
-    setTransactions(loadTransactions());
-  };
-
-  const handleGrantVip = (email: string) => {
-    const res = grantVipToUser(email);
-    if (res.success) {
-      setNotification({ type: 'success', message: res.message });
-      setNewVipEmail('');
-      refreshData();
-    } else {
-      setNotification({ type: 'error', message: res.message });
+  // Load real data from Supabase or fallback
+  const refreshData = async () => {
+    setIsRefreshing(true);
+    try {
+      if (isSupabaseConfigured) {
+        const [remoteUsers, remoteTxs] = await Promise.all([
+          supabaseFetchRegisteredUsers(),
+          supabaseFetchTransactions(),
+        ]);
+        if (remoteUsers && remoteUsers.length > 0) {
+          setUsers(remoteUsers);
+          setIsDbLive(true);
+        } else {
+          setUsers(loadRegisteredUsers());
+        }
+        setTransactions(remoteTxs || []);
+      } else {
+        setUsers(loadRegisteredUsers());
+        setTransactions(loadTransactions());
+      }
+    } catch (err) {
+      console.error('Error refreshing founder data:', err);
+      setUsers(loadRegisteredUsers());
+      setTransactions(loadTransactions());
+    } finally {
+      setIsRefreshing(false);
     }
-    setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleRevokeVip = (email: string) => {
-    const res = revokeVipFromUser(email);
-    if (res.success) {
-      setNotification({ type: 'success', message: res.message });
-      refreshData();
-    } else {
-      setNotification({ type: 'error', message: res.message });
-    }
-    setTimeout(() => setNotification(null), 4000);
-  };
-
-  const handleAddDemoTransaction = () => {
-    const randomUser = users.find((u) => !u.isFounder) || users[0];
-    const plan = Math.random() > 0.5 ? 'pro_annual' : 'pro_monthly';
-    const amount = plan === 'pro_annual' ? 59.99 : 7.99;
-    recordTransaction(
-      randomUser?.email || 'cliente@ejemplo.com',
-      randomUser?.name || 'Cliente Demo',
-      plan,
-      plan === 'pro_annual' ? 'annual' : 'monthly',
-      amount
-    );
+  useEffect(() => {
     refreshData();
-    setNotification({ type: 'success', message: `Nueva transacción de prueba registrada ($${amount}).` });
-    setTimeout(() => setNotification(null), 3000);
+  }, []);
+
+  const handleGrantVip = async (email: string) => {
+    if (isSupabaseConfigured) {
+      const res = await supabaseGrantVip(email);
+      grantVipToUser(email);
+      if (res.success) {
+        setNotification({ type: 'success', message: res.message });
+        setNewVipEmail('');
+        await refreshData();
+      } else {
+        setNotification({ type: 'error', message: res.message });
+      }
+    } else {
+      const res = grantVipToUser(email);
+      if (res.success) {
+        setNotification({ type: 'success', message: res.message });
+        setNewVipEmail('');
+        refreshData();
+      } else {
+        setNotification({ type: 'error', message: res.message });
+      }
+    }
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handleRevokeVip = async (email: string) => {
+    if (isSupabaseConfigured) {
+      const res = await supabaseRevokeVip(email);
+      revokeVipFromUser(email);
+      if (res.success) {
+        setNotification({ type: 'success', message: res.message });
+        await refreshData();
+      } else {
+        setNotification({ type: 'error', message: res.message });
+      }
+    } else {
+      const res = revokeVipFromUser(email);
+      if (res.success) {
+        setNotification({ type: 'success', message: res.message });
+        refreshData();
+      } else {
+        setNotification({ type: 'error', message: res.message });
+      }
+    }
+    setTimeout(() => setNotification(null), 4000);
   };
 
   // KPI Calculations
@@ -158,17 +203,23 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
           </div>
 
           <div className="flex items-center gap-2.5">
-            <span className="px-3 py-1.5 rounded-xl bg-white/10 text-xs font-bold text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Sistema Operativo</span>
+            <span className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 ${
+              isDbLive
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+            }`}>
+              <Database className="w-3.5 h-3.5" />
+              <span>{isDbLive ? 'Supabase Conectado' : 'Modo Seguro Local'}</span>
             </span>
             <button
               type="button"
-              onClick={handleAddDemoTransaction}
-              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-zinc-950 text-xs font-bold transition-all shadow-sm"
-              title="Simular un pago recibido para verificar actualización de métricas"
+              onClick={refreshData}
+              disabled={isRefreshing}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-extrabold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+              title="Consultar datos y transacciones reales en Supabase"
             >
-              + Simular Venta
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>{isRefreshing ? 'Sincronizando...' : 'Actualizar'}</span>
             </button>
           </div>
         </div>

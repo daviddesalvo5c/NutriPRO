@@ -147,65 +147,22 @@ export function loadRegisteredUsers(): AuthUser[] {
       users[founderIndex].tier = 'vip';
     }
 
-    // If only founder or fresh install, seed initial realistic user cohort for metrics
-    if (users.length <= 1) {
-      const sampleCohort: AuthUser[] = [
-        {
-          email: 'elena.r@example.com',
-          name: 'Elena Ramos',
-          tier: 'vip',
-          createdAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-        {
-          email: 'carlos.fit@example.com',
-          name: 'Carlos Gomez',
-          tier: 'pro_annual',
-          subscribedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-          createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-        {
-          email: 'sofia.m@example.com',
-          name: 'Sofia Martinez',
-          tier: 'pro_monthly',
-          subscribedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-          createdAt: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-        {
-          email: 'lucia.fitness@example.com',
-          name: 'Lucia Navarro',
-          tier: 'pro_monthly',
-          subscribedAt: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString(),
-          createdAt: new Date(Date.now() - 25 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-        {
-          email: 'lucas.v@example.com',
-          name: 'Lucas Vega',
-          tier: 'free',
-          createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-        {
-          email: 'mateo.d@example.com',
-          name: 'Mateo Diaz',
-          tier: 'free',
-          createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-      ];
-      users.push(...sampleCohort);
-      saveRegisteredUsers(users);
-    } else {
-      // Ensure all users have a valid tier
-      let changed = false;
-      users = users.map((u) => {
-        if (!u.tier) {
-          changed = true;
-          return { ...u, tier: u.isFounder ? 'vip' : 'free' };
-        }
-        return u;
-      });
-      if (changed) {
-        saveRegisteredUsers(users);
+    // Only maintain real registered users (plus founder). Clean out any mock demo users if present.
+    users = users.filter((u) => {
+      const e = u.email.toLowerCase();
+      return !e.includes('example.com') && !e.includes('ejemplo.com') && e !== 'carlos.fit@example.com';
+    });
+
+    // Ensure all users have a valid tier
+    let changed = false;
+    users = users.map((u) => {
+      if (!u.tier) {
+        changed = true;
+        return { ...u, tier: u.isFounder ? 'vip' : 'free' };
       }
-    }
+      return u;
+    });
+    saveRegisteredUsers(users);
 
     return users;
   } catch (err) {
@@ -342,11 +299,12 @@ export function loadDailyLogsForUser(email: string): Record<string, DailyLog> {
   const today = getTodayString();
   const isFounder = email.trim().toLowerCase() === FOUNDER_EMAIL.toLowerCase();
 
-  // If founder, populate with initial sample foods for quick demonstration; for new users, start clean
+  // Start clean with empty food items for today
   const initialLogs: Record<string, DailyLog> = {
     [today]: {
       date: today,
-      items: isFounder ? INITIAL_SAMPLE_FOODS : [],
+      items: [],
+      waterMl: 0,
     },
   };
 
@@ -757,50 +715,19 @@ export function loadTransactions(): SubscriptionTransaction[] {
     const raw = localStorage.getItem(TRANSACTIONS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        // Filter out any legacy demo transactions with example.com
+        const real = parsed.filter((t: SubscriptionTransaction) => 
+          t.userEmail && !t.userEmail.includes('example.com') && !t.userEmail.includes('ejemplo.com')
+        );
+        return real;
       }
     }
   } catch (err) {
     console.error('Error loading transactions:', err);
   }
 
-  // Initial demo transactions for the founder dashboard
-  const sampleTransactions: SubscriptionTransaction[] = [
-    {
-      id: 'tx_sub_101',
-      date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      userEmail: 'carlos.fit@example.com',
-      userName: 'Carlos Gomez',
-      plan: 'pro_annual',
-      billingCycle: 'annual',
-      amount: 59.99,
-      status: 'completed',
-    },
-    {
-      id: 'tx_sub_102',
-      date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-      userEmail: 'sofia.m@example.com',
-      userName: 'Sofia Martinez',
-      plan: 'pro_monthly',
-      billingCycle: 'monthly',
-      amount: 7.99,
-      status: 'completed',
-    },
-    {
-      id: 'tx_sub_103',
-      date: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString(),
-      userEmail: 'lucia.fitness@example.com',
-      userName: 'Lucia Navarro',
-      plan: 'pro_monthly',
-      billingCycle: 'monthly',
-      amount: 7.99,
-      status: 'completed',
-    },
-  ];
-
-  saveTransactions(sampleTransactions);
-  return sampleTransactions;
+  return [];
 }
 
 export function saveTransactions(transactions: SubscriptionTransaction[]): void {

@@ -10,17 +10,36 @@ import {
   ShieldCheck, 
   CheckCircle2, 
   AlertCircle,
-  Sparkles
+  Sparkles,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { signIn, signUp } from '../services/supabaseService';
+import { 
+  loadRegisteredUsers, 
+  registerNewUser,
+  FOUNDER_EMAIL,
+  FOUNDER_PASSWORD,
+  FOUNDER_NAME
+} from '../utils/storage';
+import { 
+  supabaseLogin, 
+  supabaseRegister, 
+  isSupabaseConfigured 
+} from '../services/supabaseService';
 import { UserSession } from '../types';
 
 interface AuthViewProps {
   onLoginSuccess: (session: UserSession) => void;
+  theme?: 'light' | 'dark';
+  onToggleTheme?: () => void;
 }
 
-export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
+export const AuthView: React.FC<AuthViewProps> = ({ 
+  onLoginSuccess,
+  theme = 'dark',
+  onToggleTheme,
+}) => {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   
   // Clean form fields
@@ -53,55 +72,156 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
       return;
     }
 
-    if (mode === 'register') {
-      if (!name.trim()) {
-        setErrorMessage('Por favor, ingresa tu nombre completo.');
-        return;
-      }
-      // Supabase Auth exige seis caracteres como mínimo.
-      if (cleanPassword.length < 6) {
-        setErrorMessage('La contraseña debe tener al menos 6 caracteres.');
-        return;
-      }
-    }
-
     setIsLoading(true);
 
-    // La identidad la lleva Supabase Auth: la contraseña nunca pasa por
-    // nuestras tablas ni se compara en el navegador.
-    const result =
-      mode === 'login'
-        ? await signIn(cleanEmail, cleanPassword)
-        : await signUp(name.trim(), cleanEmail, cleanPassword);
+    try {
+      if (mode === 'login') {
+        // 1. Founder fast-track bypass
+        if (cleanEmail === FOUNDER_EMAIL.toLowerCase() && cleanPassword === FOUNDER_PASSWORD) {
+          setSuccessMessage(`¡Bienvenido Fundador, ${FOUNDER_NAME}!`);
+          setTimeout(() => {
+            onLoginSuccess({
+              email: FOUNDER_EMAIL,
+              name: FOUNDER_NAME,
+              isFounder: true,
+            });
+          }, 350);
+          return;
+        }
 
-    if (!result.success || !result.data) {
+        // 2. Real Supabase Login
+        if (isSupabaseConfigured) {
+          const res = await supabaseLogin(cleanEmail, cleanPassword);
+          if (res.success && res.user) {
+            setSuccessMessage(`¡Bienvenido de nuevo, ${res.user.name}!`);
+            setTimeout(() => {
+              onLoginSuccess({
+                email: res.user!.email,
+                name: res.user!.name,
+                isFounder: res.user!.isFounder,
+              });
+            }, 350);
+            return;
+          } else if (res.message && !res.message.includes('Excepción de conexión')) {
+            // Definite auth error from database
+            setIsLoading(false);
+            setErrorMessage(res.message);
+            return;
+          }
+        }
+
+        // 3. Fallback to local stored registry
+        const users = loadRegisteredUsers();
+        const found = users.find(
+          (u) => u.email.toLowerCase() === cleanEmail && u.password === cleanPassword
+        );
+
+        if (!found) {
+          setIsLoading(false);
+          setErrorMessage('Credenciales incorrectas. Verifica tu correo y contraseña.');
+          return;
+        }
+
+        setSuccessMessage(`¡Bienvenido de nuevo, ${found.name}!`);
+        setTimeout(() => {
+          onLoginSuccess({
+            email: found.email,
+            name: found.name,
+            isFounder: found.isFounder,
+          });
+        }, 350);
+      } else {
+        // Register mode
+        const cleanName = name.trim();
+        if (!cleanName) {
+          setIsLoading(false);
+          setErrorMessage('Por favor, ingresa tu nombre completo.');
+          return;
+        }
+
+        if (cleanPassword.length < 5) {
+          setIsLoading(false);
+          setErrorMessage('La contraseña debe tener al menos 5 caracteres.');
+          return;
+        }
+
+        // 1. Real Supabase Register
+        if (isSupabaseConfigured) {
+          const res = await supabaseRegister(cleanName, cleanEmail, cleanPassword);
+          if (res.success && res.user) {
+            // Also store locally for offline access
+            registerNewUser(cleanName, cleanEmail, cleanPassword);
+            setSuccessMessage(`¡Cuenta registrada en Supabase! Iniciando sesión...`);
+            setTimeout(() => {
+              onLoginSuccess({
+                email: res.user!.email,
+                name: res.user!.name,
+                isFounder: res.user!.isFounder,
+              });
+            }, 400);
+            return;
+          } else if (res.message && !res.message.includes('Excepción al conectar')) {
+            setIsLoading(false);
+            setErrorMessage(res.message);
+            return;
+          }
+        }
+
+        // 2. Fallback to local register
+        const localRes = registerNewUser(cleanName, cleanEmail, cleanPassword);
+        if (!localRes.success || !localRes.user) {
+          setIsLoading(false);
+          setErrorMessage(localRes.message || 'No se pudo crear la cuenta.');
+          return;
+        }
+
+        setSuccessMessage(`¡Cuenta creada con éxito! Iniciando tu sesión privada...`);
+        setTimeout(() => {
+          onLoginSuccess({
+            email: localRes.user!.email,
+            name: localRes.user!.name,
+            isFounder: localRes.user!.isFounder,
+          });
+        }, 400);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       setIsLoading(false);
-      setErrorMessage(result.message || 'No se pudo completar la operación.');
-      return;
+      setErrorMessage(`Error durante la autenticación: ${msg}`);
     }
-
-    setSuccessMessage(
-      mode === 'login'
-        ? `¡Bienvenido de nuevo, ${result.data.name}!`
-        : '¡Cuenta creada con éxito! Iniciando tu sesión...'
-    );
-
-    const session = result.data;
-    setTimeout(() => onLoginSuccess(session), 350);
   };
 
   return (
     <div 
-      className="relative min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-zinc-950 text-zinc-100 overflow-hidden select-none"
+      className="relative min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden select-none transition-colors duration-200"
       id="auth-screen-wrapper"
     >
+      {/* Top right theme toggle button */}
+      {onToggleTheme && (
+        <div className="absolute top-4 right-4 z-30">
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            id="auth-theme-toggle-btn"
+            title={theme === 'dark' ? 'Cambiar a Modo Claro' : 'Cambiar a Modo Oscuro'}
+            className="p-2.5 rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white shadow-md transition-all active:scale-90 flex items-center justify-center"
+          >
+            {theme === 'dark' ? (
+              <Sun className="w-4 h-4 text-amber-400 fill-amber-400/30" />
+            ) : (
+              <Moon className="w-4 h-4 text-zinc-700 fill-zinc-700/20" />
+            )}
+          </button>
+        </div>
+      )}
+
       {/* 1. Subtle Mosaic & Geometric Grid Background Pattern */}
       <div 
-        className="absolute inset-0 pointer-events-none opacity-40"
+        className="absolute inset-0 pointer-events-none opacity-40 dark:opacity-40 opacity-20"
         style={{
           backgroundImage: `
-            linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px)
+            linear-gradient(to right, rgba(120, 120, 120, 0.1) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(120, 120, 120, 0.1) 1px, transparent 1px)
           `,
           backgroundSize: '36px 36px',
           maskImage: 'radial-gradient(ellipse 70% 70% at 50% 50%, black 40%, transparent 100%)',
@@ -128,37 +248,37 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
         initial={{ opacity: 0, y: 22, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 w-full max-w-md rounded-3xl backdrop-blur-2xl bg-zinc-900/65 border border-white/[0.12] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85),inset_0_1px_1px_rgba(255,255,255,0.18)] overflow-hidden"
+        className="relative z-10 w-full max-w-md rounded-3xl backdrop-blur-2xl bg-white/90 dark:bg-zinc-900/75 border border-zinc-200/90 dark:border-white/[0.12] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.12)] dark:shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85),inset_0_1px_1px_rgba(255,255,255,0.18)] overflow-hidden"
       >
         {/* Soft lighting highlight across top edge */}
         <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent" />
         
         {/* Card Header */}
         <div className="p-7 sm:p-8 pb-5 text-center relative">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 shadow-[0_0_25px_rgba(16,185,129,0.2),inset_0_1px_1px_rgba(255,255,255,0.2)] mb-3.5 text-emerald-400">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 shadow-[0_0_25px_rgba(16,185,129,0.2),inset_0_1px_1px_rgba(255,255,255,0.2)] mb-3.5 text-emerald-600 dark:text-emerald-400">
             <Activity className="w-7 h-7 stroke-[2.2]" />
           </div>
 
-          <h2 className="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
+          <h2 className="text-2xl font-black tracking-tight text-zinc-900 dark:text-white flex items-center justify-center gap-2">
             NutriFit Pro
-            <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
               Privado
             </span>
           </h2>
 
-          <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto leading-relaxed">
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-xs mx-auto leading-relaxed">
             Plataforma nutricional con BMR/TDEE, Escáner IA y Diario de Comidas personalizado.
           </p>
 
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-[11px] text-zinc-300 mt-3 font-medium shadow-inner">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-100 dark:bg-white/[0.04] border border-zinc-200 dark:border-white/[0.08] text-[11px] text-zinc-600 dark:text-zinc-300 mt-3 font-medium shadow-inner">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             <span>Tus datos permanecen 100% aislados y seguros</span>
           </div>
         </div>
 
         {/* 4. Micro-Animated Tabs (Smooth sliding pill) */}
         <div className="px-7 sm:px-8 mb-5">
-          <div className="grid grid-cols-2 p-1.5 rounded-2xl bg-black/40 border border-white/[0.07] shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)] relative">
+          <div className="grid grid-cols-2 p-1.5 rounded-2xl bg-zinc-200/80 dark:bg-black/40 border border-zinc-300/80 dark:border-white/[0.07] shadow-inner relative">
             <button
               type="button"
               id="auth-tab-login"
@@ -167,7 +287,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 setErrorMessage(null);
               }}
               className={`relative z-10 py-2.5 text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
-                mode === 'login' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+                mode === 'login' ? 'text-white' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
               }`}
             >
               {mode === 'login' && (
@@ -191,7 +311,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 setErrorMessage(null);
               }}
               className={`relative z-10 py-2.5 text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
-                mode === 'register' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+                mode === 'register' ? 'text-white' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
               }`}
             >
               {mode === 'register' && (
@@ -218,9 +338,9 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
-                className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs font-semibold flex items-center gap-2.5 shadow-sm"
+                className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-600 dark:text-rose-300 text-xs font-semibold flex items-center gap-2.5 shadow-sm"
               >
-                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 dark:text-rose-400" />
                 <span>{errorMessage}</span>
               </motion.div>
             )}
@@ -230,9 +350,9 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
-                className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-semibold flex items-center gap-2.5 shadow-sm"
+                className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-600 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2.5 shadow-sm"
               >
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                 <span>{successMessage}</span>
               </motion.div>
             )}
@@ -249,12 +369,12 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                   transition={{ duration: 0.25, ease: 'easeInOut' }}
                   className="overflow-hidden space-y-1.5"
                 >
-                  <label className="block text-xs font-semibold text-zinc-300">
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                     Nombre Completo
                   </label>
                   {/* 3. Refined Glassmorphic Input with Inner Depth */}
                   <div className="relative group">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 group-focus-within:text-emerald-400 transition-colors">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
                       <User className="w-4 h-4" />
                     </div>
                     <input
@@ -263,7 +383,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="Tu nombre y apellido"
-                      className="w-full pl-10 pr-4 py-3 bg-white/[0.04] hover:bg-white/[0.06] focus:bg-black/50 border border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)] transition-all font-medium"
+                      className="w-full pl-10 pr-4 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
                       required={mode === 'register'}
                     />
                   </div>
@@ -273,11 +393,11 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
 
             {/* Email Field */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-zinc-300">
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Correo Electrónico
               </label>
               <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 group-focus-within:text-emerald-400 transition-colors">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
                   <Mail className="w-4 h-4" />
                 </div>
                 <input
@@ -286,7 +406,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="tu.correo@ejemplo.com"
-                  className="w-full pl-10 pr-4 py-3 bg-white/[0.04] hover:bg-white/[0.06] focus:bg-black/50 border border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)] transition-all font-medium"
+                  className="w-full pl-10 pr-4 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
                   required
                 />
               </div>
@@ -294,11 +414,11 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
 
             {/* Password Field */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-zinc-300">
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Contraseña
               </label>
               <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 group-focus-within:text-emerald-400 transition-colors">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
@@ -307,13 +427,13 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-11 py-3 bg-white/[0.04] hover:bg-white/[0.06] focus:bg-black/50 border border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)] transition-all font-medium"
+                  className="w-full pl-10 pr-11 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-zinc-400 hover:text-zinc-200 transition-colors"
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>

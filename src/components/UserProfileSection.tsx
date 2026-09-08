@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, 
   Scale, 
@@ -27,7 +27,7 @@ import {
   Gender, 
   GoalIntensity, 
   GoalType, 
-  UserProfile,
+  UserProfile, 
   SubscriptionTier,
   UserSession
 } from '../types';
@@ -64,8 +64,30 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
 }) => {
   // Local form state
   const [formData, setFormData] = useState<UserProfile>({ ...profile });
+  const [ageInput, setAgeInput] = useState<string>(() => (profile.age ? String(profile.age) : ''));
+  const [heightInput, setHeightInput] = useState<string>(() => (profile.heightCm ? String(profile.heightCm) : ''));
+  const [weightInput, setWeightInput] = useState<string>(() => (profile.weightKg ? String(profile.weightKg) : ''));
+
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [showFormulaDetails, setShowFormulaDetails] = useState<boolean>(false);
+
+  // Synchronize local form and string states whenever external profile updates
+  useEffect(() => {
+    setFormData(profile);
+    setAgeInput(profile.age ? String(profile.age) : '');
+    setHeightInput(profile.heightCm ? String(profile.heightCm) : '');
+    setWeightInput(profile.weightKg ? String(profile.weightKg) : '');
+  }, [
+    profile.age,
+    profile.heightCm,
+    profile.weightKg,
+    profile.gender,
+    profile.goal,
+    profile.goalIntensity,
+    profile.activityLevel,
+    profile.formula,
+    profile.name
+  ]);
 
   // Live calculations based on current form inputs
   const liveCalcs = getProfileCalculations(formData);
@@ -83,9 +105,119 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
 
   const bmiInfo = getBmiCategory(bmi);
 
-  // Handler for saving changes
+  // Handlers for numeric fields that allow empty string typing
+  const handleAgeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    // Allow empty string or digits only
+    if (val === '' || /^\d*$/.test(val)) {
+      setAgeInput(val);
+      if (val.trim() === '') return;
+      const parsed = parseInt(val, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        const updated = { ...formData, age: parsed };
+        setFormData(updated);
+        onUpdateProfile(updated);
+      }
+    }
+  };
+
+  const handleAgeBlur = () => {
+    const trimmed = ageInput.trim();
+    if (trimmed === '' || isNaN(Number(trimmed)) || Number(trimmed) <= 0) {
+      const fallback = formData.age || 28;
+      setAgeInput(String(fallback));
+    } else {
+      const clamped = Math.min(120, Math.max(10, parseInt(trimmed, 10)));
+      setAgeInput(String(clamped));
+      if (clamped !== formData.age) {
+        const updated = { ...formData, age: clamped };
+        setFormData(updated);
+        onUpdateProfile(updated);
+      }
+    }
+  };
+
+  const handleHeightChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    // Allow empty string or decimal typing
+    if (val === '' || /^[\d.,]*$/.test(val)) {
+      setHeightInput(val);
+      if (val.trim() === '') return;
+      const parsed = parseFloat(val.replace(',', '.'));
+      if (!isNaN(parsed) && parsed > 0) {
+        const updated = { ...formData, heightCm: parsed };
+        setFormData(updated);
+        onUpdateProfile(updated);
+      }
+    }
+  };
+
+  const handleHeightBlur = () => {
+    const trimmed = heightInput.trim();
+    if (trimmed === '' || isNaN(Number(trimmed.replace(',', '.'))) || Number(trimmed.replace(',', '.')) <= 0) {
+      const fallback = formData.heightCm || 175;
+      setHeightInput(String(fallback));
+    } else {
+      const clamped = Math.min(250, Math.max(70, parseFloat(trimmed.replace(',', '.'))));
+      setHeightInput(String(clamped));
+      if (clamped !== formData.heightCm) {
+        const updated = { ...formData, heightCm: clamped };
+        setFormData(updated);
+        onUpdateProfile(updated);
+      }
+    }
+  };
+
+  const handleWeightChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val === '' || /^[\d.,]*$/.test(val)) {
+      setWeightInput(val);
+      if (val.trim() === '' || val.endsWith('.') || val.endsWith(',')) return;
+      const parsed = parseFloat(val.replace(',', '.'));
+      if (!isNaN(parsed) && parsed > 0) {
+        const updated = { ...formData, weightKg: parsed };
+        setFormData(updated);
+        onUpdateProfile(updated);
+      }
+    }
+  };
+
+  const handleWeightBlur = () => {
+    const trimmed = weightInput.trim();
+    if (trimmed === '' || isNaN(Number(trimmed.replace(',', '.'))) || Number(trimmed.replace(',', '.')) <= 0) {
+      const fallback = formData.weightKg || 75;
+      setWeightInput(String(fallback));
+    } else {
+      const clamped = Math.min(350, Math.max(25, parseFloat(trimmed.replace(',', '.'))));
+      const rounded = Math.round(clamped * 10) / 10;
+      setWeightInput(String(rounded));
+      if (rounded !== formData.weightKg) {
+        const updated = { ...formData, weightKg: rounded };
+        setFormData(updated);
+        onUpdateProfile(updated);
+      }
+    }
+  };
+
+  // Handler for saving changes explicitly
   const handleSave = () => {
-    onUpdateProfile(formData);
+    const parsedAge = parseInt(ageInput, 10);
+    const parsedHeight = parseFloat(heightInput.replace(',', '.'));
+    const parsedWeight = parseFloat(weightInput.replace(',', '.'));
+
+    const finalProfile: UserProfile = {
+      ...formData,
+      age: !isNaN(parsedAge) && parsedAge > 0 ? parsedAge : formData.age,
+      heightCm: !isNaN(parsedHeight) && parsedHeight > 0 ? parsedHeight : formData.heightCm,
+      weightKg: !isNaN(parsedWeight) && parsedWeight > 0 ? parsedWeight : formData.weightKg,
+    };
+
+    setFormData(finalProfile);
+    setAgeInput(String(finalProfile.age));
+    setHeightInput(String(finalProfile.heightCm));
+    setWeightInput(String(finalProfile.weightKg));
+
+    onUpdateProfile(finalProfile);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -341,11 +473,12 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
                   <Calendar className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     id="input-profile-age"
-                    type="number"
-                    min={12}
-                    max={100}
-                    value={formData.age}
-                    onChange={(e) => setFormData({ ...formData, age: Math.max(1, Number(e.target.value)) })}
+                    type="text"
+                    inputMode="numeric"
+                    value={ageInput}
+                    onChange={handleAgeChange}
+                    onBlur={handleAgeBlur}
+                    placeholder="Ej. 28"
                     className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:text-zinc-100"
                   />
                 </div>
@@ -360,11 +493,12 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
                   <Ruler className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     id="input-profile-height"
-                    type="number"
-                    min={100}
-                    max={250}
-                    value={formData.heightCm}
-                    onChange={(e) => setFormData({ ...formData, heightCm: Math.max(50, Number(e.target.value)) })}
+                    type="text"
+                    inputMode="decimal"
+                    value={heightInput}
+                    onChange={handleHeightChange}
+                    onBlur={handleHeightBlur}
+                    placeholder="Ej. 175"
                     className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:text-zinc-100"
                   />
                 </div>
@@ -379,12 +513,12 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
                   <Scale className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     id="input-profile-weight"
-                    type="number"
-                    step="0.1"
-                    min={30}
-                    max={300}
-                    value={formData.weightKg}
-                    onChange={(e) => setFormData({ ...formData, weightKg: Math.max(20, Number(e.target.value)) })}
+                    type="text"
+                    inputMode="decimal"
+                    value={weightInput}
+                    onChange={handleWeightChange}
+                    onBlur={handleWeightBlur}
+                    placeholder="Ej. 75.5"
                     className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:text-zinc-100"
                   />
                 </div>

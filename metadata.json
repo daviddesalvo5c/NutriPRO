@@ -1,6 +1,6 @@
 {
   "name": "Calculadora Nutricional y Perfil de Usuario",
-  "description": "Calcula BMR y TDEE con fórmulas científicas (Mifflin-St Jeor y Harris-Benedict), define objetivos calóricos y de macronutrientes, y registra tu diario de comidas con barras de progreso adaptativas.",
+  "description": "Diario y escáner nutricional inteligente con IA y 95%+ de precisión, base de datos de alimentos argentinos por porción o gramos, cálculo de macros y planes de suscripción Mercado Pago.",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

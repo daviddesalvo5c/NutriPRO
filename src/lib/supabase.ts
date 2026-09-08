@@ -1,8 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Read Supabase credentials from Vite environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Read Supabase credentials from Vite environment variables, with real production fallbacks
+const supabaseUrl = 
+  import.meta.env.VITE_SUPABASE_URL || 
+  'https://pmnnqmmjbkucnmlmukwl.supabase.co';
+
+const supabaseAnonKey = 
+  import.meta.env.VITE_SUPABASE_ANON_KEY || 
+  'sb_publishable_wnB0GkWe-Wh2ngB3YUIHHg_q6vSTzuU';
 
 // Detect if valid configuration is present
 export const isSupabaseConfigured: boolean = Boolean(

@@ -61,289 +61,332 @@ export const Navbar: React.FC<NavbarProps> = ({
   }[profile.goal];
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-3">
-          {/* Logo and App Title */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setActiveTab('diary')}
-              className="flex items-center gap-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-lg group"
-              id="navbar-brand-logo-btn"
-            >
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-sm shadow-emerald-500/20 group-hover:scale-105 transition-transform">
-                <Activity className="w-5 h-5 stroke-[2.2]" />
-              </div>
-              <div>
-                <span className="text-base font-bold text-zinc-900 dark:text-zinc-50 tracking-tight flex items-center gap-1.5">
-                  NutriFit Pro
-                  <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
-                    Privado
+    <>
+      <header className="sticky top-0 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 shadow-xs transition-colors duration-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16 gap-3">
+            {/* Logo and App Title */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setActiveTab('diary')}
+                className="flex items-center gap-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-lg group"
+                id="navbar-brand-logo-btn"
+              >
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-sm shadow-emerald-500/20 group-hover:scale-105 transition-transform">
+                  <Activity className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <span className="text-base font-bold text-zinc-900 dark:text-zinc-50 tracking-tight flex items-center gap-1.5">
+                    NutriFit Pro
+                    <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
+                      Privado
+                    </span>
                   </span>
-                </span>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 hidden sm:block truncate max-w-[200px]">
-                  {session?.email || 'Diario & Escáner IA'}
-                </p>
-              </div>
-            </button>
-          </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 hidden sm:block truncate max-w-[200px]">
+                    {session?.email || 'Diario & Escáner IA'}
+                  </p>
+                </div>
+              </button>
+            </div>
 
-          {/* Desktop Navigation Tabs */}
-          <nav className="hidden md:flex items-center gap-1 bg-zinc-100/80 dark:bg-zinc-800/80 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/60">
-            <button
-              id="nav-tab-diary"
-              onClick={() => setActiveTab('diary')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'diary'
-                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs font-bold'
-                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-              }`}
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              Diario
-            </button>
-
-            {/* Escáner Tab */}
-            <button
-              id="nav-tab-scanner"
-              onClick={() => setActiveTab('scanner')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                activeTab === 'scanner'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
-              }`}
-            >
-              <Scan className="w-3.5 h-3.5" />
-              <span>Escáner IA</span>
-            </button>
-
-            {/* Menús & Recetas Tab */}
-            <button
-              id="nav-tab-planner"
-              onClick={() => setActiveTab('planner')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'planner'
-                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs font-bold'
-                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-              }`}
-            >
-              <ChefHat className="w-3.5 h-3.5" />
-              Menú & Recetas
-            </button>
-
-            {/* Biblioteca de Alimentos Tab */}
-            <button
-              id="nav-tab-foods"
-              onClick={() => setActiveTab('foods')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'foods'
-                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs font-bold'
-                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-              }`}
-            >
-              <Utensils className="w-3.5 h-3.5" />
-              Alimentos
-            </button>
-
-            {/* Progreso & Métricas Tab */}
-            <button
-              id="nav-tab-progress"
-              onClick={() => setActiveTab('progress')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'progress'
-                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs font-bold'
-                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              Progreso & Métricas
-            </button>
-
-            <button
-              id="nav-tab-profile"
-              onClick={() => setActiveTab('profile')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'profile'
-                  ? 'bg-white dark:bg-zinc-900 text-emerald-700 dark:text-emerald-400 shadow-xs font-bold'
-                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-              }`}
-            >
-              <User className="w-3.5 h-3.5" />
-              Perfil & Metas
-            </button>
-          </nav>
-
-          {/* User Quick Profile Target Pill, Theme Toggle, VIP Badge & Session Logout */}
-          <div className="flex items-center gap-2">
-            {/* VIP / Pro / Plans Badge Button */}
-            {onOpenPlansModal && (
-              <>
-                {currentTier === 'vip' || session?.isFounder ? (
-                  <button
-                    type="button"
-                    id="topbar-vip-badge-btn"
-                    onClick={onOpenPlansModal}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-amber-950 text-xs font-black shadow-sm shadow-amber-500/20 hover:scale-105 active:scale-95 transition-all border border-amber-300"
-                    title="✦ Miembro VIP: Acceso Total Gratuito"
-                  >
-                    <span className="text-sm font-black">✦</span>
-                    <span className="tracking-tight">Miembro VIP ✦</span>
-                  </button>
-                ) : currentTier === 'pro_monthly' || currentTier === 'pro_annual' ? (
-                  <button
-                    type="button"
-                    id="topbar-pro-badge-btn"
-                    onClick={onOpenPlansModal}
-                    className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold shadow-xs hover:bg-emerald-700 transition-all"
-                    title="Plan Pro Activo"
-                  >
-                    <Crown className="w-3.5 h-3.5 text-amber-300" />
-                    <span>Plan Pro</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    id="topbar-upgrade-plans-btn"
-                    onClick={onOpenPlansModal}
-                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-[11px] sm:text-xs font-black shadow-xs hover:scale-105 transition-all"
-                    title="Ver Planes de Suscripción"
-                  >
-                    <Sparkles className="w-3 h-3 text-amber-300" />
-                    <span>Planes Pro</span>
-                  </button>
-                )}
-              </>
-            )}
-
-            {/* Dark / Light Mode Switcher */}
-            {onToggleTheme && (
+            {/* Desktop Center Navigation Pills */}
+            <nav className="hidden md:flex items-center gap-1 bg-zinc-100/90 dark:bg-zinc-800/80 p-1 rounded-2xl border border-zinc-200/80 dark:border-zinc-700/80 shadow-xs">
               <button
                 type="button"
-                id="theme-toggle-button"
-                onClick={onToggleTheme}
-                title={theme === 'dark' ? 'Cambiar a Modo Claro' : 'Cambiar a Modo Oscuro'}
-                className="p-2 rounded-xl text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-800 transition-all flex items-center justify-center"
+                id="header-nav-diary"
+                onClick={() => setActiveTab('diary')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'diary'
+                    ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
+                }`}
               >
-                {theme === 'dark' ? (
-                  <Sun className="w-4 h-4 text-amber-400 fill-amber-400/20" />
-                ) : (
-                  <Moon className="w-4 h-4 text-zinc-700" />
-                )}
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Diario</span>
               </button>
-            )}
+              <button
+                type="button"
+                id="header-nav-foods"
+                onClick={() => setActiveTab('foods')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'foods'
+                    ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
+                }`}
+              >
+                <Utensils className="w-3.5 h-3.5" />
+                <span>Alimentos</span>
+              </button>
+              <button
+                type="button"
+                id="header-nav-scanner"
+                onClick={() => setActiveTab('scanner')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'scanner'
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xs'
+                    : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
+                }`}
+              >
+                <Scan className="w-3.5 h-3.5" />
+                <span>Escáner IA</span>
+              </button>
+              <button
+                type="button"
+                id="header-nav-planner"
+                onClick={() => setActiveTab('planner')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'planner'
+                    ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
+                }`}
+              >
+                <ChefHat className="w-3.5 h-3.5" />
+                <span>Menús</span>
+              </button>
+              <button
+                type="button"
+                id="header-nav-progress"
+                onClick={() => setActiveTab('progress')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'progress'
+                    ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>Progreso</span>
+              </button>
+              <button
+                type="button"
+                id="header-nav-profile"
+                onClick={() => setActiveTab('profile')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'profile'
+                    ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>Perfil</span>
+              </button>
+            </nav>
 
-            <button
-              id="topbar-user-profile-button"
-              onClick={onOpenProfile}
-              title="Abrir y configurar Perfil de Usuario"
-              className="flex items-center gap-2.5 p-1.5 sm:px-3 sm:py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 hover:border-emerald-500/50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all group focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 flex items-center justify-center font-bold text-xs shrink-0">
-                {profile.name ? profile.name.charAt(0).toUpperCase() : 'U'}
+            {/* Top Bar: User Goal Pill, VIP/Plans Badge, Theme Toggle & Session Logout */}
+            <div className="flex items-center gap-2">
+              {/* Quick Calories Goal Display */}
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-xl bg-zinc-100 dark:bg-zinc-800/90 border border-zinc-200/70 dark:border-zinc-700/70 text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                <Flame className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
+                <span>{calculations.targetCalories.toLocaleString()} kcal</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded border font-medium ml-1 ${goalBadgeColor}`}>
+                  {goalText}
+                </span>
               </div>
-              <div className="text-left hidden sm:block">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate max-w-[120px]">
-                    {profile.name || session?.name || 'Mi Perfil'}
-                  </span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded border font-medium ${goalBadgeColor}`}>
-                    {goalText}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-                  <Flame className="w-3 h-3 text-emerald-600 fill-emerald-600" />
-                  <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                    {calculations.targetCalories.toLocaleString()} kcal
-                  </span>
-                </div>
-              </div>
-            </button>
 
-            {/* Logout Button */}
-            <button
-              type="button"
-              id="topbar-logout-button"
-              onClick={onLogout}
-              title={`Cerrar sesión (${session?.email || 'Usuario'})`}
-              className="p-2 sm:px-3 sm:py-2 rounded-xl text-zinc-500 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-zinc-200 dark:border-zinc-800 transition-all flex items-center gap-1.5 text-xs font-bold"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden lg:inline">Salir</span>
-            </button>
+              {/* VIP / Pro / Plans Badge Button (Mercado Pago Argentina) */}
+              {onOpenPlansModal && (
+                <>
+                  {currentTier === 'vip' || session?.isFounder ? (
+                    <button
+                      type="button"
+                      id="topbar-vip-badge-btn"
+                      onClick={onOpenPlansModal}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-amber-950 text-xs font-black shadow-sm shadow-amber-500/20 hover:scale-105 active:scale-95 transition-all border border-amber-300"
+                      title="✦ Miembro VIP: Acceso Total Gratuito"
+                    >
+                      <span className="text-sm font-black">✦</span>
+                      <span className="tracking-tight">VIP Activo</span>
+                    </button>
+                  ) : currentTier === 'pro_monthly' || currentTier === 'pro_annual' ? (
+                    <button
+                      type="button"
+                      id="topbar-pro-badge-btn"
+                      onClick={onOpenPlansModal}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold shadow-xs hover:bg-emerald-700 transition-all"
+                      title="Plan Pro Activo"
+                    >
+                      <Crown className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Plan Pro</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      id="topbar-upgrade-plans-btn"
+                      onClick={onOpenPlansModal}
+                      className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-[11px] sm:text-xs font-black shadow-xs hover:scale-105 transition-all"
+                      title="Ver Planes Pro (Mercado Pago)"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-300" />
+                      <span>Planes Pro</span>
+                    </button>
+                  )}
+                </>
+              )}
+
+              {/* Dark / Light Mode Switcher */}
+              {onToggleTheme && (
+                <button
+                  type="button"
+                  id="theme-toggle-button"
+                  onClick={onToggleTheme}
+                  title={theme === 'dark' ? 'Cambiar a Modo Claro' : 'Cambiar a Modo Oscuro'}
+                  className="p-2 rounded-xl text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-800 transition-all flex items-center justify-center active:scale-90"
+                >
+                  {theme === 'dark' ? (
+                    <Sun className="w-4 h-4 text-amber-400 fill-amber-400/30 transition-transform duration-200" />
+                  ) : (
+                    <Moon className="w-4 h-4 text-zinc-700 fill-zinc-700/20 transition-transform duration-200" />
+                  )}
+                </button>
+              )}
+
+              {/* User Profile Header Button */}
+              <button
+                id="topbar-user-profile-button"
+                onClick={onOpenProfile}
+                title="Abrir Perfil"
+                className="flex items-center gap-2 p-1 sm:px-2.5 sm:py-1 rounded-xl border border-zinc-200 dark:border-zinc-700 hover:border-emerald-500/50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all group focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 flex items-center justify-center font-black text-xs shrink-0">
+                  {profile.name ? profile.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 hidden sm:inline truncate max-w-[100px]">
+                  {profile.name || session?.name || 'Perfil'}
+                </span>
+              </button>
+
+              {/* Logout Button */}
+              <button
+                type="button"
+                id="topbar-logout-button"
+                onClick={onLogout}
+                title={`Cerrar sesión (${session?.email || 'Usuario'})`}
+                className="p-2 rounded-xl text-zinc-500 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-zinc-200 dark:border-zinc-800 transition-all flex items-center justify-center active:scale-90"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
+      </header>
+
+      {/* Unified Bottom Dock Bar (For APK / Mobile & Adaptive Dock on all screens) */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none pb-2 sm:pb-4 px-2 sm:px-4">
+        <nav 
+          id="unified-bottom-dock"
+          className="pointer-events-auto max-w-xl w-full mx-auto bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-zinc-200/90 dark:border-zinc-800/90 rounded-2xl sm:rounded-3xl shadow-[0_12px_36px_rgba(0,0,0,0.15)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.65)] px-2 py-1.5 sm:px-4 sm:py-2 flex items-center justify-around ring-1 ring-black/5 dark:ring-white/5 transition-all"
+        >
+          {/* 1. Diario */}
+          <button
+            type="button"
+            id="dock-tab-diary"
+            onClick={() => setActiveTab('diary')}
+            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+              activeTab === 'diary'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Diario</span>
+            {activeTab === 'diary' && (
+              <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
+            )}
+          </button>
+
+          {/* 2. Alimentos */}
+          <button
+            type="button"
+            id="dock-tab-foods"
+            onClick={() => setActiveTab('foods')}
+            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+              activeTab === 'foods'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <Utensils className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Alimentos</span>
+            {activeTab === 'foods' && (
+              <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
+            )}
+          </button>
+
+          {/* 3. Escáner IA (Hero Center Button) */}
+          <button
+            type="button"
+            id="dock-tab-scanner"
+            onClick={() => setActiveTab('scanner')}
+            className="flex flex-col items-center -mt-5 sm:-mt-6 group px-1 active:scale-95 transition-transform"
+          >
+            <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-white shadow-xl transition-all ${
+              activeTab === 'scanner'
+                ? 'bg-gradient-to-tr from-emerald-600 via-teal-500 to-emerald-500 ring-4 ring-emerald-500/20 shadow-emerald-500/40 scale-110'
+                : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30 group-hover:scale-105'
+            }`}>
+              <Scan className="w-6 h-6 stroke-[2.5]" />
+            </div>
+            <span className={`text-[10px] sm:text-[11px] font-black mt-0.5 whitespace-nowrap ${
+              activeTab === 'scanner' ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-600 dark:text-zinc-300'
+            }`}>
+              Escáner IA
+            </span>
+          </button>
+
+          {/* 4. Menús */}
+          <button
+            type="button"
+            id="dock-tab-planner"
+            onClick={() => setActiveTab('planner')}
+            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+              activeTab === 'planner'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <ChefHat className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Menús</span>
+            {activeTab === 'planner' && (
+              <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
+            )}
+          </button>
+
+          {/* 5. Progreso */}
+          <button
+            type="button"
+            id="dock-tab-progress"
+            onClick={() => setActiveTab('progress')}
+            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+              activeTab === 'progress'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Progreso</span>
+            {activeTab === 'progress' && (
+              <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
+            )}
+          </button>
+
+          {/* 6. Perfil */}
+          <button
+            type="button"
+            id="dock-tab-profile"
+            onClick={() => setActiveTab('profile')}
+            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+              activeTab === 'profile'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <User className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Perfil</span>
+            {activeTab === 'profile' && (
+              <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
+            )}
+          </button>
+        </nav>
       </div>
-
-      {/* Mobile Bottom Subnav (visible on small screens) with highlighted center scanner */}
-      <div className="flex md:hidden border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 py-1 justify-around items-center">
-        <button
-          id="mobile-nav-diary"
-          onClick={() => setActiveTab('diary')}
-          className={`flex flex-col items-center py-1 px-1.5 text-[10px] font-medium rounded-lg ${
-            activeTab === 'diary'
-              ? 'text-emerald-600 dark:text-emerald-400 font-bold'
-              : 'text-zinc-500 dark:text-zinc-400'
-          }`}
-        >
-          <BookOpen className="w-4 h-4 mb-0.5" />
-          Diario
-        </button>
-
-        <button
-          id="mobile-nav-planner"
-          onClick={() => setActiveTab('planner')}
-          className={`flex flex-col items-center py-1 px-1.5 text-[10px] font-medium rounded-lg ${
-            activeTab === 'planner'
-              ? 'text-emerald-600 dark:text-emerald-400 font-bold'
-              : 'text-zinc-500 dark:text-zinc-400'
-          }`}
-        >
-          <ChefHat className="w-4 h-4 mb-0.5" />
-          Menús
-        </button>
-
-        {/* Highlighted Scanner Central Action Button */}
-        <button
-          id="mobile-nav-scanner"
-          onClick={() => setActiveTab('scanner')}
-          className="flex flex-col items-center -mt-4 group"
-        >
-          <div className="w-11 h-11 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/30 group-hover:scale-105 active:scale-95 transition-transform">
-            <Scan className="w-5 h-5 stroke-[2.3]" />
-          </div>
-          <span className={`text-[10px] font-bold mt-0.5 ${
-            activeTab === 'scanner' ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-600 dark:text-zinc-400'
-          }`}>
-            Escáner
-          </span>
-        </button>
-
-        <button
-          id="mobile-nav-progress"
-          onClick={() => setActiveTab('progress')}
-          className={`flex flex-col items-center py-1 px-1.5 text-[10px] font-medium rounded-lg ${
-            activeTab === 'progress'
-              ? 'text-emerald-600 dark:text-emerald-400 font-bold'
-              : 'text-zinc-500 dark:text-zinc-400'
-          }`}
-        >
-          <BarChart3 className="w-4 h-4 mb-0.5" />
-          Progreso
-        </button>
-
-        <button
-          id="mobile-nav-profile"
-          onClick={() => setActiveTab('profile')}
-          className={`flex flex-col items-center py-1 px-1.5 text-[10px] font-medium rounded-lg ${
-            activeTab === 'profile'
-              ? 'text-emerald-600 dark:text-emerald-400 font-bold'
-              : 'text-zinc-500 dark:text-zinc-400'
-          }`}
-        >
-          <User className="w-4 h-4 mb-0.5" />
-          Perfil
-        </button>
-      </div>
-    </header>
+    </>
   );
 };

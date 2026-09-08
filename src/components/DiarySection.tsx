@@ -22,8 +22,8 @@ import {
 import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
 import { getProfileCalculations } from '../utils/nutritionCalculations';
 import { WaterTrackerCard } from './WaterTrackerCard';
-import { FoodSearchPicker } from './FoodSearchPicker';
 import { hasUserProAccess } from '../utils/storage';
+import { AddArgentineFoodModal } from './AddArgentineFoodModal';
 
 interface DiarySectionProps {
   profile: UserProfile;
@@ -192,26 +192,40 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
           )}
         </div>
 
-        {/* Actions: Escanear con Cámara & Profile Objective Pill */}
-        <div className="flex items-center gap-2.5 flex-wrap">
+        {/* Actions: Escanear con Cámara, Base AR & Profile Objective Pill */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            id="diary-btn-open-argentine-food"
+            onClick={() => setActiveModalMeal('lunch')}
+            className="px-3 py-1.5 bg-zinc-100 hover:bg-emerald-50 dark:bg-zinc-800 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-200/60 dark:border-emerald-800/60 shadow-xs transition-all hover:scale-[1.02]"
+            title="Buscar alimentos argentinos por porción o gramos"
+          >
+            <Utensils className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Alimentos AR</span>
+          </button>
+
           <button
             type="button"
             id="diary-btn-open-scanner"
             onClick={onNavigateToScanner}
-            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all hover:scale-[1.02]"
+            className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 transition-all hover:scale-[1.02]"
+            title="Escanear con Cámara Inteligente (95%+ Precisión)"
           >
             <Camera className="w-3.5 h-3.5" />
-            <span>Escanear Foto</span>
+            <span>Escanear IA</span>
           </button>
 
           <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-zinc-500 dark:text-zinc-400 hidden sm:inline">Metas para:</span>
             <button
               onClick={onOpenProfile}
-              className="font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 flex items-center gap-1 transition-colors"
+              className="font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800/80 px-2.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 hover:border-emerald-500 flex items-center gap-1.5 transition-all"
             >
-              <span>{profile.name || 'Usuario'} ({profile.goal === 'deficit' ? 'Déficit' : profile.goal === 'surplus' ? 'Superávit' : 'Mantenimiento'})</span>
-              <Edit3 className="w-3 h-3" />
+              <span>{profile.name || 'Mi Perfil'}</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 font-extrabold">
+                {profile.goal === 'deficit' ? 'Déficit' : profile.goal === 'surplus' ? 'Superávit' : 'Mantenimiento'}
+              </span>
+              <Edit3 className="w-3 h-3 text-zinc-400" />
             </button>
           </div>
         </div>
@@ -444,10 +458,10 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                     type="button"
                     id={`btn-add-food-${meal.type}`}
                     onClick={() => setActiveModalMeal(meal.type)}
-                    className="py-1.5 px-3 bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/50 dark:hover:text-emerald-300 text-zinc-700 dark:text-zinc-300 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 border border-zinc-200/80 dark:border-zinc-700"
+                    className="py-1.5 px-3 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 border border-emerald-200/80 dark:border-emerald-800/80 shadow-xs active:scale-95"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    Añadir alimento
+                    <Plus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 stroke-[2.5]" />
+                    <span>Añadir</span>
                   </button>
                 </div>
               </div>
@@ -464,7 +478,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                       key={item.id}
                       className="p-3.5 px-4 flex items-center justify-between hover:bg-zinc-50/70 dark:hover:bg-zinc-800/30 transition-colors group"
                     >
-                      <div className="pr-4">
+                      <div className="pr-3">
                         <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 block">
                           {item.name}
                         </span>
@@ -473,12 +487,24 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-4 shrink-0">
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold hidden sm:flex">
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50 dark:border-indigo-800/50">
+                            {item.proteinGrams}g P
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/50">
+                            {item.carbsGrams}g C
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200/50 dark:border-rose-800/50">
+                            {item.fatGrams}g G
+                          </span>
+                        </div>
+
                         <div className="text-right">
                           <span className="text-xs font-black text-zinc-800 dark:text-zinc-200 block">
                             {item.calories} kcal
                           </span>
-                          <span className="text-[10px] text-zinc-400">
+                          <span className="text-[10px] text-zinc-400 sm:hidden">
                             {item.proteinGrams}P · {item.carbsGrams}C · {item.fatGrams}G
                           </span>
                         </div>
@@ -502,183 +528,17 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
       </div>
       )}
 
-      {/* Add Food Modal */}
+      {/* Argentine Food Database Search & Portion Modal */}
       {activeModalMeal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 w-full max-w-md rounded-2xl p-6 shadow-xl animate-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3 mb-4">
-              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                Añadir Alimento a {mealsList.find((m) => m.type === activeModalMeal)?.label}
-              </h3>
-              <button
-                onClick={() => setActiveModalMeal(null)}
-                className="text-zinc-400 hover:text-zinc-600 text-xs font-bold"
-              >
-                Cerrar ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveNewFood} className="space-y-4">
-              {/* Buscar el alimento rellena los macros solo: no hay que saberlos. */}
-              <FoodSearchPicker
-                onPick={(food) => {
-                  setFoodName(food.name);
-                  setPortion(food.portionDescription);
-                  setCalories(food.calories);
-                  setProtein(food.protein);
-                  setCarbs(food.carbs);
-                  setFat(food.fat);
-                }}
-              />
-
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800" />
-                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                  o escríbelo a mano
-                </span>
-                <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800" />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-food-name">
-                  Nombre del alimento / plato *
-                </label>
-                <input
-                  id="modal-food-name"
-                  type="text"
-                  required
-                  placeholder="Ej. Salmón al horno con patatas"
-                  value={foodName}
-                  onChange={(e) => setFoodName(e.target.value)}
-                  className="w-full px-3 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-portion">
-                  Porción / Descripción
-                </label>
-                <input
-                  id="modal-portion"
-                  type="text"
-                  placeholder="Ej. 1 filete (180g)"
-                  value={portion}
-                  onChange={(e) => setPortion(e.target.value)}
-                  className="w-full px-3 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div>
-                  <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 mb-1" htmlFor="modal-calories">
-                    Calorías *
-                  </label>
-                  <input
-                    id="modal-calories"
-                    type="number"
-                    required
-                    min={0}
-                    placeholder="kcal"
-                    value={calories}
-                    onChange={(e) => setCalories(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-indigo-600 dark:text-indigo-400 mb-1" htmlFor="modal-protein">
-                    Proteína (g)
-                  </label>
-                  <input
-                    id="modal-protein"
-                    type="number"
-                    min={0}
-                    placeholder="g"
-                    value={protein}
-                    onChange={(e) => setProtein(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-amber-600 dark:text-amber-400 mb-1" htmlFor="modal-carbs">
-                    Carbos (g)
-                  </label>
-                  <input
-                    id="modal-carbs"
-                    type="number"
-                    min={0}
-                    placeholder="g"
-                    value={carbs}
-                    onChange={(e) => setCarbs(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-rose-600 dark:text-rose-400 mb-1" htmlFor="modal-fat">
-                    Grasa (g)
-                  </label>
-                  <input
-                    id="modal-fat"
-                    type="number"
-                    min={0}
-                    placeholder="g"
-                    value={fat}
-                    onChange={(e) => setFat(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl"
-                  />
-                </div>
-              </div>
-
-              {/* Quick suggestions */}
-              <div>
-                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-1.5">
-                  Plantillas rápidas:
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { name: 'Arroz con pollo y verduras', cal: 480, p: 42, c: 55, f: 8 },
-                    { name: 'Batido de proteína con plátano', cal: 260, p: 30, c: 28, f: 3 },
-                    { name: 'Tostada integral con aguacate y huevo', cal: 320, p: 14, c: 25, f: 18 },
-                    { name: 'Manzana con mantequilla de cacahuete', cal: 190, p: 5, c: 22, f: 9 },
-                  ].map((preset, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => {
-                        setFoodName(preset.name);
-                        setCalories(preset.cal);
-                        setProtein(preset.p);
-                        setCarbs(preset.c);
-                        setFat(preset.f);
-                      }}
-                      className="text-[11px] px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
-                    >
-                      {preset.name} ({preset.cal} kcal)
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
-                <button
-                  type="button"
-                  onClick={() => setActiveModalMeal(null)}
-                  className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 rounded-xl"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs"
-                >
-                  Guardar Alimento
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <AddArgentineFoodModal
+          isOpen={Boolean(activeModalMeal)}
+          onClose={() => setActiveModalMeal(null)}
+          mealType={activeModalMeal}
+          onSaveFoodItem={(item) => {
+            onAddFoodItem(selectedDate, item);
+            setActiveModalMeal(null);
+          }}
+        />
       )}
     </div>
   );
