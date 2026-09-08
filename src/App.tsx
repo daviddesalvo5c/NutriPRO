@@ -6,8 +6,11 @@ import { ScannerSection } from './components/ScannerSection';
 import { ProgressSection } from './components/ProgressSection';
 import { PlannerAndRecipesSection } from './components/PlannerAndRecipesSection';
 import { FoodsSection } from './components/FoodsSection';
+import { ActivitySection } from './components/ActivitySection';
 import { AuthView } from './components/AuthView';
 import { SubscriptionPlansModal } from './components/SubscriptionPlansModal';
+import { PWAInstallModal } from './components/PWAInstallModal';
+import { usePWAInstall } from './hooks/usePWAInstall';
 import { ToastContainer } from './components/ToastContainer';
 import { notificationService } from './utils/notificationService';
 import { 
@@ -20,6 +23,7 @@ import {
   supabaseFetchUserProfile,
   isSupabaseConfigured
 } from './services/supabaseService';
+import { cloudSyncService } from './services/cloudSyncService';
 import { 
   DailyLog, 
   FoodItem, 
@@ -29,7 +33,9 @@ import {
   WeightEntry,
   BodyMeasurementEntry,
   ProgressPhotoEntry,
-  SubscriptionTier
+  SubscriptionTier,
+  ActivityDayLog,
+  WorkoutItem
 } from './types';
 import { 
   getTodayString, 
@@ -51,7 +57,11 @@ import {
   saveThemePreference,
   getUserTier,
   setUserTier,
-  recordSubscriptionTransaction
+  recordSubscriptionTransaction,
+  loadActivityLogsForUser,
+  saveActivityLogsForUser,
+  loadDiscountActivityCaloriesPreference,
+  saveDiscountActivityCaloriesPreference
 } from './utils/storage';
 
 export default function App() {
@@ -92,6 +102,17 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('diary');
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayString());
 
+  // PWA Install prompt hook
+  const { 
+    showPrompt, 
+    closePrompt, 
+    openPromptManually, 
+    isInstallable, 
+    isInstalled, 
+    isIOS, 
+    install 
+  } = usePWAInstall();
+
   // Subscription plan & modal state
   const [isPlansModalOpen, setIsPlansModalOpen] = useState<boolean>(false);
   const [currentTier, setCurrentTier] = useState<SubscriptionTier>(() => {
@@ -115,6 +136,24 @@ export default function App() {
       return loadDailyLogsForUser(initialSession.email);
     }
     return {};
+  });
+
+  // User-isolated activity logs state
+  const [activityLogs, setActivityLogs] = useState<Record<string, ActivityDayLog>>(() => {
+    const initialSession = loadActiveSession();
+    if (initialSession) {
+      return loadActivityLogsForUser(initialSession.email);
+    }
+    return {};
+  });
+
+  // User-isolated discount activity calories preference (default true)
+  const [discountActivityCalories, setDiscountActivityCalories] = useState<boolean>(() => {
+    const initialSession = loadActiveSession();
+    if (initialSession) {
+      return loadDiscountActivityCaloriesPreference(initialSession.email);
+    }
+    return true;
   });
 
   // User-isolated weight tracking
@@ -147,20 +186,85 @@ export default function App() {
   // Whenever session changes, reload that user's private data
   useEffect(() => {
     if (session) {
+      // 1. Instant local load from device storage
       const userProfile = loadStoredProfileForUser(session.email, session.name);
       const userLogs = loadDailyLogsForUser(session.email);
       const userWeights = loadWeightHistoryForUser(session.email, userProfile.weightKg);
       const userMeasurements = loadMeasurementsForUser(session.email);
       const userPhotos = loadProgressPhotosForUser(session.email);
+      const userActivity = loadActivityLogsForUser(session.email);
+      const userDiscount = loadDiscountActivityCaloriesPreference(session.email);
 
       setProfile(userProfile);
       setDailyLogs(userLogs);
+      setActivityLogs(userActivity);
+      setDiscountActivityCalories(userDiscount);
       setWeightHistory(userWeights);
       setMeasurements(userMeasurements);
       setProgressPhotos(userPhotos);
       setCurrentTier(getUserTier(session.email));
 
-      // Attempt background fetch from Supabase if connected
+      // 2. Real-time Cloud Synchronization (Mobile <-> PC cross-device)
+      cloudSyncService.pullUserData(session.email).then((cloudData) => {
+        if (cloudData) {
+          // Merge daily logs from cloud
+          if (cloudData.dailyLogs && Object.keys(cloudData.dailyLogs).length > 0) {
+            setDailyLogs((prev) => {
+              const mergedLogs = { ...prev, ...cloudData.dailyLogs };
+              saveDailyLogsForUser(session.email, mergedLogs);
+              return mergedLogs;
+            });
+          } else if (userLogs && Object.keys(userLogs).length > 0) {
+            // Local device has logs but cloud doesn't: push to cloud!
+            cloudSyncService.pushUserData({ email: session.email, dailyLogs: userLogs });
+          }
+
+          // Merge profile
+          if (cloudData.profile && Object.keys(cloudData.profile).length > 0) {
+            setProfile((prev) => {
+              const mergedProfile = { ...prev, ...cloudData.profile };
+              saveStoredProfileForUser(session.email, mergedProfile);
+              return mergedProfile;
+            });
+          } else if (userProfile.weightKg) {
+            cloudSyncService.pushUserData({ email: session.email, profile: userProfile });
+          }
+
+          // Sync weight history
+          if (cloudData.weightHistory && cloudData.weightHistory.length > 0) {
+            setWeightHistory(cloudData.weightHistory);
+            saveWeightHistoryForUser(session.email, cloudData.weightHistory);
+          } else if (userWeights.length > 0) {
+            cloudSyncService.pushUserData({ email: session.email, weightHistory: userWeights });
+          }
+
+          // Sync measurements
+          if (cloudData.measurements && cloudData.measurements.length > 0) {
+            setMeasurements(cloudData.measurements);
+            saveMeasurementsForUser(session.email, cloudData.measurements);
+          }
+
+          // Sync tier
+          if (cloudData.tier) {
+            setCurrentTier(cloudData.tier);
+            setUserTier(session.email, cloudData.tier);
+          }
+        } else {
+          // No cloud records yet; push this device's full state to initialize the cloud
+          cloudSyncService.pushUserData({
+            email: session.email,
+            name: session.name,
+            profile: userProfile,
+            dailyLogs: userLogs,
+            weightHistory: userWeights,
+            measurements: userMeasurements,
+            progressPhotos: userPhotos,
+            tier: getUserTier(session.email),
+          });
+        }
+      }).catch((err) => console.warn('Cloud sync pull notice:', err));
+
+      // 3. Attempt background fetch from Supabase if connected
       if (isSupabaseConfigured) {
         supabaseFetchDailyLogs(session.email)
           .then((remoteLogs) => {
@@ -227,10 +331,10 @@ export default function App() {
     setUserTier(session.email, newTier);
     setCurrentTier(newTier);
 
-    const amount = billingCycle === 'annual' ? 59.99 : 7.99;
+    const amount = billingCycle === 'annual' ? 94999 : 12999;
     const description = billingCycle === 'annual' 
-      ? 'Suscripción Anual NutriFit Pro ($59.99/año)' 
-      : 'Suscripción Mensual NutriFit Pro ($7.99/mes)';
+      ? 'Suscripción Anual NutriFit Pro ($94.999 ARS/año)' 
+      : 'Suscripción Mensual NutriFit Pro ($12.999 ARS/mes)';
 
     recordSubscriptionTransaction({
       userEmail: session.email,
@@ -238,9 +342,9 @@ export default function App() {
       tier: newTier,
       billingCycle,
       amount,
-      currency: 'USD',
+      currency: 'ARS',
       status: 'completed',
-      paymentMethod: 'Stripe / Mercado Pago Checkout Real',
+      paymentMethod: 'Mercado Pago Argentina',
       description,
     });
 
@@ -259,6 +363,14 @@ export default function App() {
     if (!session) return;
     setProfile(updated);
     saveStoredProfileForUser(session.email, updated);
+
+    // Sync to Cloud Backend
+    cloudSyncService.pushUserData({
+      email: session.email,
+      name: session.name,
+      profile: updated,
+    }).catch((err) => console.warn('Cloud sync profile notice:', err));
+
     if (isSupabaseConfigured) {
       supabaseSaveUserProfile(updated, session.email).catch((err) =>
         console.warn('Supabase profile save error:', err)
@@ -302,6 +414,11 @@ export default function App() {
     // Notify user in-app
     notificationService.notifyFoodSaved(newItem.name, newItem.calories, newItem.mealType);
 
+    // Sync to Cloud Backend in real-time
+    cloudSyncService.addFoodItem(session.email, date, newItem).catch((err) =>
+      console.warn('Cloud sync add item notice:', err)
+    );
+
     // Sync to Supabase in background
     if (isSupabaseConfigured) {
       supabaseAddFoodItem(session.email, date, newItem).catch((err) =>
@@ -329,6 +446,13 @@ export default function App() {
         },
       };
       saveDailyLogsForUser(session.email, updatedLogs);
+
+      // Sync updated logs to Cloud
+      cloudSyncService.pushUserData({
+        email: session.email,
+        dailyLogs: updatedLogs,
+      }).catch((err) => console.warn('Cloud sync multiple items notice:', err));
+
       return updatedLogs;
     });
 
@@ -364,6 +488,11 @@ export default function App() {
       return updatedLogs;
     });
 
+    // Sync removal to Cloud
+    cloudSyncService.removeFoodItem(session.email, itemId).catch((err) =>
+      console.warn('Cloud sync remove item notice:', err)
+    );
+
     if (isSupabaseConfigured) {
       supabaseRemoveFoodItem(session.email, itemId).catch((err) =>
         console.warn('Supabase remove food error:', err)
@@ -394,6 +523,11 @@ export default function App() {
       profile.dailyWaterGoalMl || 2500
     );
 
+    // Sync water hydration to Cloud
+    cloudSyncService.updateWater(session.email, date, amountMl).catch((err) =>
+      console.warn('Cloud sync water notice:', err)
+    );
+
     // Sync to Supabase
     if (isSupabaseConfigured) {
       supabaseUpdateWater(session.email, date, amountMl).catch((err) =>
@@ -411,6 +545,13 @@ export default function App() {
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
       );
       saveWeightHistoryForUser(session.email, updated);
+
+      // Sync weight history to Cloud
+      cloudSyncService.pushUserData({
+        email: session.email,
+        weightHistory: updated,
+      }).catch((err) => console.warn('Cloud sync weight notice:', err));
+
       return updated;
     });
   };
@@ -468,6 +609,89 @@ export default function App() {
     });
   };
 
+  // Activity Log Handlers
+  const handleSaveWorkout = (date: string, workout: Omit<WorkoutItem, 'id' | 'date'>) => {
+    if (!session) return;
+    setActivityLogs((prev) => {
+      const day = prev[date] || {
+        date,
+        connectedService: null,
+        syncedSteps: 0,
+        syncedCalories: 0,
+        workouts: [],
+      };
+      const newWorkoutItem: WorkoutItem = {
+        ...workout,
+        id: `workout_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        date,
+      };
+      const updatedDay: ActivityDayLog = {
+        ...day,
+        workouts: [newWorkoutItem, ...day.workouts],
+      };
+      const updatedLogs = { ...prev, [date]: updatedDay };
+      saveActivityLogsForUser(session.email, updatedLogs);
+      return updatedLogs;
+    });
+  };
+
+  const handleDeleteWorkout = (date: string, workoutId: string) => {
+    if (!session) return;
+    setActivityLogs((prev) => {
+      const day = prev[date];
+      if (!day) return prev;
+      const updatedDay: ActivityDayLog = {
+        ...day,
+        workouts: day.workouts.filter((w) => w.id !== workoutId),
+      };
+      const updatedLogs = { ...prev, [date]: updatedDay };
+      saveActivityLogsForUser(session.email, updatedLogs);
+      return updatedLogs;
+    });
+  };
+
+  const handleUpdateSyncData = (
+    date: string,
+    service: 'apple_health' | 'google_fit' | null,
+    steps: number,
+    calories: number
+  ) => {
+    if (!session) return;
+    setActivityLogs((prev) => {
+      const day = prev[date] || {
+        date,
+        connectedService: null,
+        syncedSteps: 0,
+        syncedCalories: 0,
+        workouts: [],
+      };
+      const updatedDay: ActivityDayLog = {
+        ...day,
+        connectedService: service,
+        syncedSteps: steps,
+        syncedCalories: calories,
+      };
+      const updatedLogs = { ...prev, [date]: updatedDay };
+      saveActivityLogsForUser(session.email, updatedLogs);
+      return updatedLogs;
+    });
+  };
+
+  const handleToggleDiscountCalories = (enabled: boolean) => {
+    if (!session) return;
+    setDiscountActivityCalories(enabled);
+    saveDiscountActivityCaloriesPreference(session.email, enabled);
+  };
+
+  // Calculate total activity burned for the selected date
+  const currentDayActivity = activityLogs[selectedDate];
+  const manualWorkoutBurn = (currentDayActivity?.workouts || []).reduce(
+    (sum, w) => sum + (w.caloriesBurned || 0),
+    0
+  );
+  const syncedBurn = currentDayActivity?.syncedCalories || 0;
+  const totalActivityBurned = manualWorkoutBurn + syncedBurn;
+
   // IF NO ACTIVE SESSION: Restrict access and present AuthView (Login / Register)
   if (!session) {
     return (
@@ -497,6 +721,8 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
         currentTier={currentTier}
         onOpenPlansModal={() => setIsPlansModalOpen(true)}
+        onOpenInstallPrompt={openPromptManually}
+        isInstallable={!isInstalled && (isInstallable || isIOS)}
       />
 
       {/* Main Content Area */}
@@ -512,6 +738,9 @@ export default function App() {
             onUpdateWater={handleUpdateWater}
             onOpenProfile={() => setActiveTab('profile')}
             onNavigateToScanner={() => setActiveTab('scanner')}
+            onNavigateToActivity={() => setActiveTab('activity')}
+            totalActivityBurned={totalActivityBurned}
+            discountActivityCalories={discountActivityCalories}
             userEmail={session.email}
             currentTier={currentTier}
             onOpenPlansModal={() => setIsPlansModalOpen(true)}
@@ -524,6 +753,20 @@ export default function App() {
               handleAddFoodItem(selectedDate, { ...item, mealType });
               setActiveTab('diary');
             }}
+          />
+        )}
+
+        {activeTab === 'activity' && (
+          <ActivitySection
+            profile={profile}
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
+            activityLogs={activityLogs}
+            onSaveWorkout={handleSaveWorkout}
+            onDeleteWorkout={handleDeleteWorkout}
+            onUpdateSyncData={handleUpdateSyncData}
+            discountCalories={discountActivityCalories}
+            onToggleDiscountCalories={handleToggleDiscountCalories}
           />
         )}
 
@@ -561,6 +804,20 @@ export default function App() {
             session={session}
             currentTier={currentTier}
             onOpenPlansModal={() => setIsPlansModalOpen(true)}
+            onRefreshUserData={() => {
+              if (session) {
+                const userProfile = loadStoredProfileForUser(session.email, session.name);
+                const userLogs = loadDailyLogsForUser(session.email);
+                const userWeights = loadWeightHistoryForUser(session.email, userProfile.weightKg);
+                const userMeasurements = loadMeasurementsForUser(session.email);
+                const userPhotos = loadProgressPhotosForUser(session.email);
+                setProfile(userProfile);
+                setDailyLogs(userLogs);
+                setWeightHistory(userWeights);
+                setMeasurements(userMeasurements);
+                setProgressPhotos(userPhotos);
+              }
+            }}
           />
         )}
 
@@ -589,6 +846,14 @@ export default function App() {
         currentTier={currentTier}
         session={session}
         onSubscribe={(tier) => handleSelectTier(tier, tier === 'pro_annual' ? 'annual' : 'monthly')}
+      />
+
+      {/* PWA Custom Premium Install Modal */}
+      <PWAInstallModal
+        isOpen={showPrompt}
+        onClose={closePrompt}
+        onInstall={install}
+        isIOS={isIOS}
       />
 
       {/* Global In-App Toast Notification Center */}

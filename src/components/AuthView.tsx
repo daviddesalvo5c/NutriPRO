@@ -12,7 +12,9 @@ import {
   AlertCircle,
   Sparkles,
   Sun,
-  Moon
+  Moon,
+  Smartphone,
+  KeyRound
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -20,14 +22,21 @@ import {
   registerNewUser,
   FOUNDER_EMAIL,
   FOUNDER_PASSWORD,
-  FOUNDER_NAME
+  FOUNDER_NAME,
+  saveDailyLogsForUser,
+  saveStoredProfileForUser,
+  saveWeightHistoryForUser,
+  saveMeasurementsForUser,
+  setUserTier
 } from '../utils/storage';
 import { 
   supabaseLogin, 
   supabaseRegister, 
   isSupabaseConfigured 
 } from '../services/supabaseService';
+import { cloudSyncService } from '../services/cloudSyncService';
 import { UserSession } from '../types';
+import { BrandLogo } from './BrandLogo';
 
 interface AuthViewProps {
   onLoginSuccess: (session: UserSession) => void;
@@ -40,13 +49,14 @@ export const AuthView: React.FC<AuthViewProps> = ({
   theme = 'dark',
   onToggleTheme,
 }) => {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'sync_code'>('login');
   
   // Clean form fields
   const [name, setName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [syncCode, setSyncCode] = useState<string>('');
 
   // Status & Validation
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -75,6 +85,42 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setIsLoading(true);
 
     try {
+      if (mode === 'sync_code') {
+        const cleanCode = syncCode.trim().toUpperCase();
+        if (!cleanCode) {
+          setIsLoading(false);
+          setErrorMessage('Por favor ingresa el código de 6 dígitos.');
+          return;
+        }
+
+        const data = await cloudSyncService.redeemSyncCode(cleanCode);
+        if (!data || !data.email) {
+          setIsLoading(false);
+          setErrorMessage('Código de sincronización inválido o expirado. Genéralo nuevamente desde tu móvil.');
+          return;
+        }
+
+        // Cache synced data into local storage on this device
+        if (data.dailyLogs) saveDailyLogsForUser(data.email, data.dailyLogs);
+        if (data.profile) saveStoredProfileForUser(data.email, data.profile);
+        if (data.weightHistory) saveWeightHistoryForUser(data.email, data.weightHistory);
+        if (data.measurements) saveMeasurementsForUser(data.email, data.measurements);
+        if (data.tier) setUserTier(data.email, data.tier);
+
+        // Also register in local registry
+        registerNewUser(data.name || data.email.split('@')[0], data.email, 'synced_account');
+
+        setSuccessMessage(`¡Dispositivo sincronizado! Cargando tus datos de ${data.name || data.email}...`);
+        setTimeout(() => {
+          onLoginSuccess({
+            email: data.email,
+            name: data.name || data.email.split('@')[0],
+            isFounder: data.email === FOUNDER_EMAIL.toLowerCase(),
+          });
+        }, 400);
+        return;
+      }
+
       if (mode === 'login') {
         // 1. Founder fast-track bypass
         if (cleanEmail === FOUNDER_EMAIL.toLowerCase() && cleanPassword === FOUNDER_PASSWORD) {
@@ -89,7 +135,23 @@ export const AuthView: React.FC<AuthViewProps> = ({
           return;
         }
 
-        // 2. Real Supabase Login
+        // 2. Real Cloud Backend Login (Cross-device Mobile <-> PC Sync)
+        const cloudRes = await cloudSyncService.login(cleanEmail, cleanPassword);
+        if (cloudRes.success && cloudRes.user) {
+          // Cache locally
+          registerNewUser(cloudRes.user.name, cloudRes.user.email, cleanPassword);
+          setSuccessMessage(`¡Bienvenido de nuevo, ${cloudRes.user.name}! Sincronizando datos...`);
+          setTimeout(() => {
+            onLoginSuccess({
+              email: cloudRes.user!.email,
+              name: cloudRes.user!.name,
+              isFounder: cloudRes.user!.isFounder,
+            });
+          }, 350);
+          return;
+        }
+
+        // 3. Supabase Login (if configured and table exists)
         if (isSupabaseConfigured) {
           const res = await supabaseLogin(cleanEmail, cleanPassword);
           if (res.success && res.user) {
@@ -102,15 +164,10 @@ export const AuthView: React.FC<AuthViewProps> = ({
               });
             }, 350);
             return;
-          } else if (res.message && !res.message.includes('Excepción de conexión')) {
-            // Definite auth error from database
-            setIsLoading(false);
-            setErrorMessage(res.message);
-            return;
           }
         }
 
-        // 3. Fallback to local stored registry
+        // 4. Fallback to local stored registry
         const users = loadRegisteredUsers();
         const found = users.find(
           (u) => u.email.toLowerCase() === cleanEmail && u.password === cleanPassword
@@ -118,7 +175,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
         if (!found) {
           setIsLoading(false);
-          setErrorMessage('Credenciales incorrectas. Verifica tu correo y contraseña.');
+          setErrorMessage('Credenciales incorrectas. Si te registraste en otro dispositivo, verifica el correo y la contraseña.');
           return;
         }
 
@@ -145,42 +202,23 @@ export const AuthView: React.FC<AuthViewProps> = ({
           return;
         }
 
-        // 1. Real Supabase Register
-        if (isSupabaseConfigured) {
-          const res = await supabaseRegister(cleanName, cleanEmail, cleanPassword);
-          if (res.success && res.user) {
-            // Also store locally for offline access
-            registerNewUser(cleanName, cleanEmail, cleanPassword);
-            setSuccessMessage(`¡Cuenta registrada en Supabase! Iniciando sesión...`);
-            setTimeout(() => {
-              onLoginSuccess({
-                email: res.user!.email,
-                name: res.user!.name,
-                isFounder: res.user!.isFounder,
-              });
-            }, 400);
-            return;
-          } else if (res.message && !res.message.includes('Excepción al conectar')) {
-            setIsLoading(false);
-            setErrorMessage(res.message);
-            return;
-          }
-        }
-
-        // 2. Fallback to local register
+        // 1. Cloud Backend Register (Persists for cross-device Mobile <-> PC access)
+        const cloudRes = await cloudSyncService.register(cleanName, cleanEmail, cleanPassword);
+        
+        // Also register in local cache
         const localRes = registerNewUser(cleanName, cleanEmail, cleanPassword);
-        if (!localRes.success || !localRes.user) {
-          setIsLoading(false);
-          setErrorMessage(localRes.message || 'No se pudo crear la cuenta.');
-          return;
+
+        // Supabase registration attempt
+        if (isSupabaseConfigured) {
+          supabaseRegister(cleanName, cleanEmail, cleanPassword).catch(() => {});
         }
 
-        setSuccessMessage(`¡Cuenta creada con éxito! Iniciando tu sesión privada...`);
+        setSuccessMessage(`¡Cuenta creada y sincronizada! Iniciando tu sesión privada...`);
         setTimeout(() => {
           onLoginSuccess({
-            email: localRes.user!.email,
-            name: localRes.user!.name,
-            isFounder: localRes.user!.isFounder,
+            email: cleanEmail,
+            name: cleanName,
+            isFounder: cleanEmail === FOUNDER_EMAIL.toLowerCase(),
           });
         }, 400);
       }
@@ -253,32 +291,29 @@ export const AuthView: React.FC<AuthViewProps> = ({
         {/* Soft lighting highlight across top edge */}
         <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent" />
         
-        {/* Card Header */}
+        {/* Card Header with Official Emblem Logo */}
         <div className="p-7 sm:p-8 pb-5 text-center relative">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 shadow-[0_0_25px_rgba(16,185,129,0.2),inset_0_1px_1px_rgba(255,255,255,0.2)] mb-3.5 text-emerald-600 dark:text-emerald-400">
-            <Activity className="w-7 h-7 stroke-[2.2]" />
-          </div>
+          <BrandLogo 
+            variant="vertical" 
+            size="lg" 
+            showSubtitle={true} 
+            subtitleText="Calculadora Nutricional & Perfil de Usuario"
+            badgeText="Privado"
+          />
 
-          <h2 className="text-2xl font-black tracking-tight text-zinc-900 dark:text-white flex items-center justify-center gap-2">
-            NutriFit Pro
-            <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-              Privado
-            </span>
-          </h2>
-
-          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-xs mx-auto leading-relaxed">
-            Plataforma nutricional con BMR/TDEE, Escáner IA y Diario de Comidas personalizado.
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-2 max-w-xs mx-auto leading-relaxed">
+            Plataforma nutricional integral con BMR/TDEE, Escáner IA y Registro de Actividad.
           </p>
 
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-100 dark:bg-white/[0.04] border border-zinc-200 dark:border-white/[0.08] text-[11px] text-zinc-600 dark:text-zinc-300 mt-3 font-medium shadow-inner">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <ShieldCheck className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
             <span>Tus datos permanecen 100% aislados y seguros</span>
           </div>
         </div>
 
         {/* 4. Micro-Animated Tabs (Smooth sliding pill) */}
-        <div className="px-7 sm:px-8 mb-5">
-          <div className="grid grid-cols-2 p-1.5 rounded-2xl bg-zinc-200/80 dark:bg-black/40 border border-zinc-300/80 dark:border-white/[0.07] shadow-inner relative">
+        <div className="px-5 sm:px-8 mb-5">
+          <div className="grid grid-cols-3 p-1.5 rounded-2xl bg-zinc-200/80 dark:bg-black/40 border border-zinc-300/80 dark:border-white/[0.07] shadow-inner relative text-[11px] sm:text-xs">
             <button
               type="button"
               id="auth-tab-login"
@@ -286,7 +321,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 setMode('login');
                 setErrorMessage(null);
               }}
-              className={`relative z-10 py-2.5 text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
+              className={`relative z-10 py-2 font-bold transition-colors flex items-center justify-center gap-1.5 ${
                 mode === 'login' ? 'text-white' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
               }`}
             >
@@ -297,9 +332,9 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   transition={{ type: 'spring', stiffness: 380, damping: 30 }}
                 />
               )}
-              <span className="relative z-10 flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5" />
-                Iniciar Sesión
+              <span className="relative z-10 flex items-center gap-1">
+                <Lock className="w-3 h-3" />
+                <span>Entrar</span>
               </span>
             </button>
 
@@ -310,7 +345,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 setMode('register');
                 setErrorMessage(null);
               }}
-              className={`relative z-10 py-2.5 text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
+              className={`relative z-10 py-2 font-bold transition-colors flex items-center justify-center gap-1.5 ${
                 mode === 'register' ? 'text-white' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
               }`}
             >
@@ -321,9 +356,33 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   transition={{ type: 'spring', stiffness: 380, damping: 30 }}
                 />
               )}
-              <span className="relative z-10 flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5" />
-                Crear Cuenta
+              <span className="relative z-10 flex items-center gap-1">
+                <User className="w-3 h-3" />
+                <span>Registro</span>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              id="auth-tab-sync"
+              onClick={() => {
+                setMode('sync_code');
+                setErrorMessage(null);
+              }}
+              className={`relative z-10 py-2 font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                mode === 'sync_code' ? 'text-white' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
+              }`}
+            >
+              {mode === 'sync_code' && (
+                <motion.div
+                  layoutId="activeAuthTabPill"
+                  className="absolute inset-0 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 shadow-[0_4px_12px_rgba(16,185,129,0.35),inset_0_1px_1px_rgba(255,255,255,0.25)] border border-emerald-400/40"
+                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1">
+                <Smartphone className="w-3 h-3" />
+                <span>Sincronizar</span>
               </span>
             </button>
           </div>
@@ -359,86 +418,123 @@ export const AuthView: React.FC<AuthViewProps> = ({
           </AnimatePresence>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Animated Name Field for Register Mode */}
-            <AnimatePresence initial={false}>
-              {mode === 'register' && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                  animate={{ opacity: 1, height: 'auto', marginTop: 0 }}
-                  exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                  transition={{ duration: 0.25, ease: 'easeInOut' }}
-                  className="overflow-hidden space-y-1.5"
-                >
+            {mode === 'sync_code' ? (
+              /* Sync Code View */
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/40 text-left">
+                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs mb-1">
+                    <Smartphone className="w-4 h-4" />
+                    <span>Sincronización Móvil ↔ PC</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                    Si ya tienes datos en tu móvil o PC, ve a <strong>Mi Perfil &gt; Sincronizar</strong> y pulsa <strong>Generar Código</strong>. Luego ingrésalo aquí para transferir tu diario al instante.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                    Nombre Completo
+                    Código PIN de Sincronización (6 dígitos)
                   </label>
-                  {/* 3. Refined Glassmorphic Input with Inner Depth */}
                   <div className="relative group">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
-                      <User className="w-4 h-4" />
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 group-focus-within:text-emerald-600 transition-colors">
+                      <KeyRound className="w-4 h-4" />
                     </div>
                     <input
                       type="text"
-                      id="auth-input-name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Tu nombre y apellido"
-                      className="w-full pl-10 pr-4 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
-                      required={mode === 'register'}
+                      maxLength={6}
+                      id="auth-input-sync-code"
+                      value={syncCode}
+                      onChange={(e) => setSyncCode(e.target.value.replace(/[^0-9a-zA-Z]/g, '').toUpperCase())}
+                      placeholder="Ej: 849201"
+                      className="w-full pl-10 pr-4 py-3.5 tracking-widest text-center font-black text-lg bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all uppercase"
+                      required
                     />
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Email Field */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                Correo Electrónico
-              </label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
-                  <Mail className="w-4 h-4" />
                 </div>
-                <input
-                  type="email"
-                  id="auth-input-email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="tu.correo@ejemplo.com"
-                  className="w-full pl-10 pr-4 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
-                  required
-                />
               </div>
-            </div>
+            ) : (
+              <>
+                {/* Animated Name Field for Register Mode */}
+                <AnimatePresence initial={false}>
+                  {mode === 'register' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                      animate={{ opacity: 1, height: 'auto', marginTop: 0 }}
+                      exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                      transition={{ duration: 0.25, ease: 'easeInOut' }}
+                      className="overflow-hidden space-y-1.5"
+                    >
+                      <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                        Nombre Completo
+                      </label>
+                      <div className="relative group">
+                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
+                          <User className="w-4 h-4" />
+                        </div>
+                        <input
+                          type="text"
+                          id="auth-input-name"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          placeholder="Tu nombre y apellido"
+                          className="w-full pl-10 pr-4 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
+                          required={mode === 'register'}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-            {/* Password Field */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                Contraseña
-              </label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
-                  <Lock className="w-4 h-4" />
+                {/* Email Field */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Correo Electrónico
+                  </label>
+                  <div className="relative group">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
+                      <Mail className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="email"
+                      id="auth-input-email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="tu.correo@ejemplo.com"
+                      className="w-full pl-10 pr-4 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
+                      required
+                    />
+                  </div>
                 </div>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  id="auth-input-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full pl-10 pr-11 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
+
+                {/* Password Field */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Contraseña
+                  </label>
+                  <div className="relative group">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 dark:text-zinc-400 group-focus-within:text-emerald-600 dark:group-focus-within:text-emerald-400 transition-colors">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      id="auth-input-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full pl-10 pr-11 py-3 bg-zinc-100/90 hover:bg-zinc-100 dark:bg-white/[0.04] dark:hover:bg-white/[0.06] focus:bg-white dark:focus:bg-black/50 border border-zinc-300 dark:border-white/[0.1] focus:border-emerald-500/80 rounded-xl text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/15 shadow-inner transition-all font-medium"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* 4. Micro-Animated Submit Button */}
             <motion.button
@@ -451,6 +547,11 @@ export const AuthView: React.FC<AuthViewProps> = ({
             >
               {isLoading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : mode === 'sync_code' ? (
+                <>
+                  <span>Sincronizar Datos y Entrar</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
               ) : mode === 'login' ? (
                 <>
                   <span>Ingresar a mi Cuenta</span>

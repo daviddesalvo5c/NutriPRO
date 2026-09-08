@@ -95,6 +95,38 @@ class NotificationManager {
     );
   }
 
+  notifySuccess(titleOrMsg: string, message?: string): void {
+    if (message !== undefined) {
+      this.addToast('success', titleOrMsg, message);
+    } else {
+      this.addToast('success', '¡Completado!', titleOrMsg);
+    }
+  }
+
+  notifyError(titleOrMsg: string, message?: string): void {
+    if (message !== undefined) {
+      this.addToast('warning', titleOrMsg, message);
+    } else {
+      this.addToast('warning', 'Atención', titleOrMsg);
+    }
+  }
+
+  notifyInfo(titleOrMsg: string, message?: string): void {
+    if (message !== undefined) {
+      this.addToast('info', titleOrMsg, message);
+    } else {
+      this.addToast('info', 'Información', titleOrMsg);
+    }
+  }
+
+  notifyFoodAdded(foodOrText: string, calories?: number, mealType?: string): void {
+    if (calories !== undefined && mealType !== undefined) {
+      this.notifyFoodSaved(foodOrText, calories, mealType);
+    } else {
+      this.addToast('success', 'Registro Exitoso', foodOrText);
+    }
+  }
+
   notifyVipGranted(email: string): void {
     this.addToast('vip', 'Acceso VIP Concedido', `Se ha otorgado membresía VIP vitalicia a ${email}.`);
   }

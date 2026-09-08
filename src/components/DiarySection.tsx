@@ -35,6 +35,9 @@ interface DiarySectionProps {
   onUpdateWater?: (date: string, amountMl: number) => void;
   onOpenProfile: () => void;
   onNavigateToScanner: () => void;
+  onNavigateToActivity?: () => void;
+  totalActivityBurned?: number;
+  discountActivityCalories?: boolean;
   userEmail?: string;
   currentTier?: SubscriptionTier;
   onOpenPlansModal?: () => void;
@@ -50,6 +53,9 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   onUpdateWater,
   onOpenProfile,
   onNavigateToScanner,
+  onNavigateToActivity,
+  totalActivityBurned = 0,
+  discountActivityCalories = true,
   userEmail = '',
   currentTier = 'free' as SubscriptionTier,
   onOpenPlansModal,
@@ -95,9 +101,13 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   const targetCarbs = profileCalcs.carbsGrams;
   const targetFat = profileCalcs.fatGrams;
 
+  // Real-time activity discount logic
+  const activeBurn = (discountActivityCalories && totalActivityBurned > 0) ? totalActivityBurned : 0;
+  const netCaloriesConsumed = Math.max(0, totalCaloriesConsumed - activeBurn);
+
   // Remaining
-  const caloriesRemaining = targetCalories - totalCaloriesConsumed;
-  const caloriesPercent = Math.min(100, Math.round((totalCaloriesConsumed / targetCalories) * 100));
+  const caloriesRemaining = targetCalories - netCaloriesConsumed;
+  const caloriesPercent = Math.min(100, Math.round((netCaloriesConsumed / targetCalories) * 100));
 
   const proteinPercent = Math.min(100, Math.round((totalProteinConsumed / targetProtein) * 100));
   const carbsPercent = Math.min(100, Math.round((totalCarbsConsumed / targetCarbs) * 100));
@@ -192,7 +202,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
           )}
         </div>
 
-        {/* Actions: Escanear con Cámara, Base AR & Profile Objective Pill */}
+        {/* Actions: Escanear con Cámara, Base AR, Actividad & Profile Objective Pill */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
@@ -204,6 +214,23 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             <Utensils className="w-3.5 h-3.5 text-emerald-600" />
             <span>Alimentos AR</span>
           </button>
+
+          {onNavigateToActivity && (
+            <button
+              type="button"
+              id="diary-btn-open-activity"
+              onClick={onNavigateToActivity}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border shadow-xs transition-all hover:scale-[1.02] ${
+                activeBurn > 0
+                  ? 'bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
+              }`}
+              title="Registrar o sincronizar actividad física"
+            >
+              <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
+              <span>{activeBurn > 0 ? `-${activeBurn} kcal act.` : 'Actividad'}</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -249,19 +276,25 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
               </span>
             </div>
 
-            <div className="flex items-baseline gap-2 mt-1">
+            <div className="flex items-baseline gap-2 mt-1 flex-wrap">
               <span className="text-4xl font-black text-zinc-900 dark:text-zinc-50 tracking-tight">
-                {totalCaloriesConsumed.toLocaleString()}
+                {activeBurn > 0 ? netCaloriesConsumed.toLocaleString() : totalCaloriesConsumed.toLocaleString()}
               </span>
               <span className="text-base font-semibold text-zinc-400">
-                / {targetCalories.toLocaleString()} kcal
+                / {targetCalories.toLocaleString()} kcal {activeBurn > 0 ? 'netas' : ''}
               </span>
+              {activeBurn > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300 font-bold border border-orange-200 dark:border-orange-800 flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-orange-500 fill-orange-500" />
+                  -{activeBurn} kcal actividad
+                </span>
+              )}
             </div>
 
             {/* Main Progress Bar */}
             <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-3.5 rounded-full overflow-hidden mt-3 p-0.5 border border-zinc-200 dark:border-zinc-700">
               <div
-                style={{ width: `${Math.min(100, (totalCaloriesConsumed / targetCalories) * 100)}%` }}
+                style={{ width: `${Math.min(100, (netCaloriesConsumed / targetCalories) * 100)}%` }}
                 className={`h-full rounded-full transition-all duration-500 ${
                   caloriesRemaining < 0
                     ? 'bg-gradient-to-r from-amber-500 to-rose-500'
@@ -271,12 +304,20 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             </div>
 
             {/* Subtext info */}
-            <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 mt-2">
-              <span>{caloriesPercent}% de tu meta diaria</span>
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                Objetivo: {profile.goal === 'deficit' ? 'Pérdida de grasa' : profile.goal === 'surplus' ? 'Hipertrofia' : 'Mantenimiento'}
-              </span>
-            </div>
+            {activeBurn > 0 ? (
+              <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 mt-2 bg-zinc-50 dark:bg-zinc-800/50 px-2.5 py-1 rounded-lg">
+                <span>Comida: <strong>{totalCaloriesConsumed} kcal</strong></span>
+                <span>Actividad: <strong className="text-orange-600 dark:text-orange-400">-{activeBurn} kcal</strong></span>
+                <span>Margen Neto: <strong className="text-emerald-600 dark:text-emerald-400">{netCaloriesConsumed} kcal</strong></span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 mt-2">
+                <span>{caloriesPercent}% de tu meta diaria</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                  Objetivo: {profile.goal === 'deficit' ? 'Pérdida de grasa' : profile.goal === 'surplus' ? 'Hipertrofia' : 'Mantenimiento'}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* 3 Macro Progress Bars */}
@@ -383,7 +424,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
               El <strong>Plan Gratuito</strong> incluye los registros de los últimos 7 días. 
-              Actualiza a <strong>NutriFit Pro</strong> o accede como <strong>Miembro VIP</strong> para consultar y registrar en cualquier fecha de tu historial sin restricciones.
+              Actualiza a <strong>NutriFit Pro</strong> para consultar y registrar en cualquier fecha de tu historial sin restricciones.
             </p>
           </div>
           <div className="flex items-center justify-center gap-3 pt-2 flex-wrap">
@@ -395,7 +436,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                 className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 hover:scale-105"
               >
                 <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>Desbloquear Historial con Pro ($7.99/m)</span>
+                <span>Desbloquear Historial con Pro ($12.999 ARS/mes)</span>
               </button>
             )}
             <button

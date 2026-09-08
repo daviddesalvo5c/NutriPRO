@@ -14,12 +14,14 @@ import {
   Moon,
   ChefHat,
   TrendingUp,
-  Crown
+  Crown,
+  Smartphone
 } from 'lucide-react';
 import { UserProfile, UserSession, SubscriptionTier } from '../types';
 import { getProfileCalculations } from '../utils/nutritionCalculations';
+import { BrandLogo } from './BrandLogo';
 
-export type AppTab = 'diary' | 'scanner' | 'profile' | 'progress' | 'foods' | 'planner';
+export type AppTab = 'diary' | 'foods' | 'activity' | 'scanner' | 'planner' | 'progress' | 'profile';
 
 interface NavbarProps {
   activeTab: AppTab;
@@ -32,6 +34,8 @@ interface NavbarProps {
   onToggleTheme?: () => void;
   currentTier?: SubscriptionTier;
   onOpenPlansModal?: () => void;
+  onOpenInstallPrompt?: () => void;
+  isInstallable?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -45,6 +49,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleTheme,
   currentTier = 'free',
   onOpenPlansModal,
+  onOpenInstallPrompt,
+  isInstallable = false,
 }) => {
   const calculations = getProfileCalculations(profile);
 
@@ -69,21 +75,27 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setActiveTab('diary')}
-                className="flex items-center gap-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-lg group"
+                className="flex items-center gap-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 rounded-lg group"
                 id="navbar-brand-logo-btn"
               >
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-sm shadow-emerald-500/20 group-hover:scale-105 transition-transform">
-                  <Activity className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-10 h-10 rounded-2xl overflow-hidden shadow-sm shadow-teal-500/20 group-hover:scale-105 transition-transform shrink-0 border border-teal-500/30">
+                  <img
+                    src="/icon.svg"
+                    alt="NutriFit Pro Logo"
+                    className="w-full h-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
                 </div>
                 <div>
-                  <span className="text-base font-bold text-zinc-900 dark:text-zinc-50 tracking-tight flex items-center gap-1.5">
-                    NutriFit Pro
-                    <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
+                  <div className="flex items-center gap-1.5 font-black text-base tracking-tight leading-none text-zinc-900 dark:text-white">
+                    <span>NUTRIFIT</span>
+                    <span className="text-teal-500 dark:text-teal-400">PRO</span>
+                    <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
                       Privado
                     </span>
-                  </span>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400 hidden sm:block truncate max-w-[200px]">
-                    {session?.email || 'Diario & Escáner IA'}
+                  </div>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 hidden sm:block truncate max-w-[200px] mt-1 font-medium">
+                    {session?.email || 'Calculadora Nutricional'}
                   </p>
                 </div>
               </button>
@@ -95,7 +107,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 type="button"
                 id="header-nav-diary"
                 onClick={() => setActiveTab('diary')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'diary'
                     ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
@@ -104,11 +116,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <BookOpen className="w-3.5 h-3.5" />
                 <span>Diario</span>
               </button>
+
               <button
                 type="button"
                 id="header-nav-foods"
                 onClick={() => setActiveTab('foods')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'foods'
                     ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
@@ -117,6 +130,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <Utensils className="w-3.5 h-3.5" />
                 <span>Alimentos</span>
               </button>
+
+              <button
+                type="button"
+                id="header-nav-activity"
+                onClick={() => setActiveTab('activity')}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'activity'
+                    ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>Actividad</span>
+              </button>
+
               <button
                 type="button"
                 id="header-nav-scanner"
@@ -130,11 +158,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <Scan className="w-3.5 h-3.5" />
                 <span>Escáner IA</span>
               </button>
+
               <button
                 type="button"
                 id="header-nav-planner"
                 onClick={() => setActiveTab('planner')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'planner'
                     ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
@@ -143,11 +172,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <ChefHat className="w-3.5 h-3.5" />
                 <span>Menús</span>
               </button>
+
               <button
                 type="button"
                 id="header-nav-progress"
                 onClick={() => setActiveTab('progress')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'progress'
                     ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
@@ -156,11 +186,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <BarChart3 className="w-3.5 h-3.5" />
                 <span>Progreso</span>
               </button>
+
               <button
                 type="button"
                 id="header-nav-profile"
                 onClick={() => setActiveTab('profile')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'profile'
                     ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/50 dark:hover:bg-zinc-700/50'
@@ -222,6 +253,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </>
               )}
 
+              {/* Install PWA Button if available */}
+              {onOpenInstallPrompt && (
+                <button
+                  type="button"
+                  id="topbar-install-pwa-btn"
+                  onClick={onOpenInstallPrompt}
+                  title="Instalar NutriFit AI como aplicación nativa"
+                  className="px-2.5 py-1.5 rounded-xl bg-zinc-100 hover:bg-emerald-50 dark:bg-zinc-800 dark:hover:bg-emerald-950/40 text-zinc-700 hover:text-emerald-700 dark:text-zinc-300 dark:hover:text-emerald-300 border border-zinc-200 dark:border-zinc-700 text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 shadow-xs"
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-500" />
+                  <span className="hidden sm:inline">Instalar App</span>
+                </button>
+              )}
+
               {/* Dark / Light Mode Switcher */}
               {onToggleTheme && (
                 <button
@@ -269,25 +314,25 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </header>
 
-      {/* Unified Bottom Dock Bar (For APK / Mobile & Adaptive Dock on all screens) */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none pb-2 sm:pb-4 px-2 sm:px-4">
+      {/* Unified Bottom Dock Bar (3 Left — Floating Center Escáner IA — 3 Right) */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none pb-2 sm:pb-3 px-1.5 sm:px-4">
         <nav 
           id="unified-bottom-dock"
-          className="pointer-events-auto max-w-xl w-full mx-auto bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-zinc-200/90 dark:border-zinc-800/90 rounded-2xl sm:rounded-3xl shadow-[0_12px_36px_rgba(0,0,0,0.15)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.65)] px-2 py-1.5 sm:px-4 sm:py-2 flex items-center justify-around ring-1 ring-black/5 dark:ring-white/5 transition-all"
+          className="pointer-events-auto max-w-2xl w-full mx-auto bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl border border-zinc-200/90 dark:border-zinc-800/90 rounded-2xl sm:rounded-3xl shadow-[0_12px_36px_rgba(0,0,0,0.15)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.65)] px-1 sm:px-2 py-1.5 sm:py-2 grid grid-cols-7 items-center justify-items-center ring-1 ring-black/5 dark:ring-white/5 transition-all"
         >
           {/* 1. Diario */}
           <button
             type="button"
             id="dock-tab-diary"
             onClick={() => setActiveTab('diary')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+            className={`w-full flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all duration-200 active:scale-95 ${
               activeTab === 'diary'
-                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50/80 dark:bg-emerald-950/40'
                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
             }`}
           >
             <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
-            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Diario</span>
+            <span className="text-[9px] sm:text-[11px] mt-0.5 whitespace-nowrap truncate max-w-full">Diario</span>
             {activeTab === 'diary' && (
               <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
             )}
@@ -298,25 +343,43 @@ export const Navbar: React.FC<NavbarProps> = ({
             type="button"
             id="dock-tab-foods"
             onClick={() => setActiveTab('foods')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+            className={`w-full flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all duration-200 active:scale-95 ${
               activeTab === 'foods'
-                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50/80 dark:bg-emerald-950/40'
                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
             }`}
           >
             <Utensils className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
-            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Alimentos</span>
+            <span className="text-[9px] sm:text-[11px] mt-0.5 whitespace-nowrap truncate max-w-full">Alimentos</span>
             {activeTab === 'foods' && (
               <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
             )}
           </button>
 
-          {/* 3. Escáner IA (Hero Center Button) */}
+          {/* 3. Actividad */}
+          <button
+            type="button"
+            id="dock-tab-activity"
+            onClick={() => setActiveTab('activity')}
+            className={`w-full flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all duration-200 active:scale-95 ${
+              activeTab === 'activity'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50/80 dark:bg-emerald-950/40'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <Activity className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+            <span className="text-[9px] sm:text-[11px] mt-0.5 whitespace-nowrap truncate max-w-full">Actividad</span>
+            {activeTab === 'activity' && (
+              <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
+            )}
+          </button>
+
+          {/* [CENTRO] 4. Escáner IA (Hero Center Button) */}
           <button
             type="button"
             id="dock-tab-scanner"
             onClick={() => setActiveTab('scanner')}
-            className="flex flex-col items-center -mt-5 sm:-mt-6 group px-1 active:scale-95 transition-transform"
+            className="w-full flex flex-col items-center -mt-5 sm:-mt-6 group px-0.5 active:scale-95 transition-transform"
           >
             <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-white shadow-xl transition-all ${
               activeTab === 'scanner'
@@ -325,62 +388,62 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}>
               <Scan className="w-6 h-6 stroke-[2.5]" />
             </div>
-            <span className={`text-[10px] sm:text-[11px] font-black mt-0.5 whitespace-nowrap ${
+            <span className={`text-[9px] sm:text-[11px] font-black mt-0.5 whitespace-nowrap truncate max-w-full ${
               activeTab === 'scanner' ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-600 dark:text-zinc-300'
             }`}>
               Escáner IA
             </span>
           </button>
 
-          {/* 4. Menús */}
+          {/* 5. Menús */}
           <button
             type="button"
             id="dock-tab-planner"
             onClick={() => setActiveTab('planner')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+            className={`w-full flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all duration-200 active:scale-95 ${
               activeTab === 'planner'
-                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50/80 dark:bg-emerald-950/40'
                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
             }`}
           >
             <ChefHat className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
-            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Menús</span>
+            <span className="text-[9px] sm:text-[11px] mt-0.5 whitespace-nowrap truncate max-w-full">Menús</span>
             {activeTab === 'planner' && (
               <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
             )}
           </button>
 
-          {/* 5. Progreso */}
+          {/* 6. Progreso */}
           <button
             type="button"
             id="dock-tab-progress"
             onClick={() => setActiveTab('progress')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+            className={`w-full flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all duration-200 active:scale-95 ${
               activeTab === 'progress'
-                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50/80 dark:bg-emerald-950/40'
                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
             }`}
           >
             <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
-            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Progreso</span>
+            <span className="text-[9px] sm:text-[11px] mt-0.5 whitespace-nowrap truncate max-w-full">Progreso</span>
             {activeTab === 'progress' && (
               <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
             )}
           </button>
 
-          {/* 6. Perfil */}
+          {/* 7. Perfil */}
           <button
             type="button"
             id="dock-tab-profile"
             onClick={() => setActiveTab('profile')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all duration-200 active:scale-95 ${
+            className={`w-full flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all duration-200 active:scale-95 ${
               activeTab === 'profile'
-                ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105 bg-emerald-50/80 dark:bg-emerald-950/40'
+                ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50/80 dark:bg-emerald-950/40'
                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60'
             }`}
           >
             <User className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
-            <span className="text-[10px] sm:text-[11px] mt-0.5 whitespace-nowrap">Perfil</span>
+            <span className="text-[9px] sm:text-[11px] mt-0.5 whitespace-nowrap truncate max-w-full">Perfil</span>
             {activeTab === 'profile' && (
               <span className="w-1 h-1 rounded-full bg-emerald-600 dark:bg-emerald-400 mt-0.5" />
             )}

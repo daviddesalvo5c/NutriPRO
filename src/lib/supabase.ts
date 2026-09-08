@@ -40,43 +40,29 @@ export const SUPABASE_CONFIG = {
 
 // SQL Schema for NutriFit Pro tables
 export const SUPABASE_SQL_SCHEMA = `-- =========================================================
--- NUTRIFIT PRO - SUPABASE DATABASE SCHEMA
--- Copia y ejecuta este script en el SQL Editor de tu proyecto Supabase
+-- NUTRIFIT PRO - SCRIPT DE HABILITACIÓN DE SINCRONIZACIÓN SUPABASE
+-- Copia y ejecuta este script en el SQL Editor de tu proyecto Supabase:
+-- https://supabase.com/dashboard/project/pmnnqmmjbkucnmlmukwl/sql
 -- =========================================================
 
--- 1. Tabla de Usuarios y Membresías
-CREATE TABLE IF NOT EXISTS public.users (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  email TEXT UNIQUE NOT NULL,
-  name TEXT NOT NULL,
-  password TEXT,
-  is_founder BOOLEAN DEFAULT FALSE,
-  tier TEXT DEFAULT 'free', -- 'free' | 'pro_monthly' | 'pro_annual' | 'vip'
-  subscribed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- 1. Habilitar políticas de sincronización para tus tablas existentes (profiles, food_logs, transactions)
+ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.food_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.transactions ENABLE ROW LEVEL SECURITY;
 
--- 2. Tabla del Diario de Alimentos
-CREATE TABLE IF NOT EXISTS public.food_items (
-  id TEXT PRIMARY KEY,
-  user_email TEXT NOT NULL,
-  date TEXT NOT NULL, -- formato 'YYYY-MM-DD'
-  name TEXT NOT NULL,
-  portion_description TEXT,
-  amount_grams NUMERIC DEFAULT 0,
-  calories NUMERIC DEFAULT 0,
-  protein_grams NUMERIC DEFAULT 0,
-  carbs_grams NUMERIC DEFAULT 0,
-  fat_grams NUMERIC DEFAULT 0,
-  meal_type TEXT NOT NULL, -- 'breakfast' | 'lunch' | 'dinner' | 'snacks'
-  time_added TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Políticas de lectura y escritura para anon y authenticated
+DROP POLICY IF EXISTS "Permitir todo a anon profiles" ON public.profiles;
+CREATE POLICY "Permitir todo a anon profiles" ON public.profiles FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3. Tabla de Registro de Hidratación (Agua)
+DROP POLICY IF EXISTS "Permitir todo a anon food_logs" ON public.food_logs;
+CREATE POLICY "Permitir todo a anon food_logs" ON public.food_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Permitir todo a anon transactions" ON public.transactions;
+CREATE POLICY "Permitir todo a anon transactions" ON public.transactions FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- 2. Tabla de Hidratación (Agua) por si aún no existe
 CREATE TABLE IF NOT EXISTS public.water_logs (
-  id TEXT PRIMARY KEY, -- formato: '{email}_{date}'
+  id TEXT PRIMARY KEY,
   user_email TEXT NOT NULL,
   date TEXT NOT NULL,
   water_ml NUMERIC DEFAULT 0,
@@ -84,42 +70,20 @@ CREATE TABLE IF NOT EXISTS public.water_logs (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT unique_user_date_water UNIQUE (user_email, date)
 );
+ALTER TABLE IF EXISTS public.water_logs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Permitir todo a anon water_logs" ON public.water_logs;
+CREATE POLICY "Permitir todo a anon water_logs" ON public.water_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 4. Tabla de Invitaciones VIP
+-- 3. Tabla de Invitaciones VIP (opcional)
 CREATE TABLE IF NOT EXISTS public.vip_invitations (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
-  status TEXT DEFAULT 'active', -- 'active' | 'revoked'
+  status TEXT DEFAULT 'active',
   invited_by TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- 5. Tabla de Transacciones y Suscripciones
-CREATE TABLE IF NOT EXISTS public.subscription_transactions (
-  id TEXT PRIMARY KEY,
-  user_email TEXT NOT NULL,
-  user_name TEXT NOT NULL,
-  plan TEXT NOT NULL, -- 'pro_monthly' | 'pro_annual'
-  billing_cycle TEXT NOT NULL, -- 'monthly' | 'annual'
-  amount NUMERIC NOT NULL,
-  status TEXT DEFAULT 'completed',
-  payment_method TEXT DEFAULT 'Stripe Card',
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Habilitar Row Level Security (RLS) pero permitir acceso público/anónimo para desarrollo rápido
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.food_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.water_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.vip_invitations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.subscription_transactions ENABLE ROW LEVEL SECURITY;
-
--- Políticas de acceso para clave anónima (públicas para esta applet)
-CREATE POLICY "Permitir todo a anon users" ON public.users FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Permitir todo a anon food_items" ON public.food_items FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Permitir todo a anon water_logs" ON public.water_logs FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Permitir todo a anon vip_invitations" ON public.vip_invitations FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Permitir todo a anon subscription_transactions" ON public.subscription_transactions FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE IF EXISTS public.vip_invitations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Permitir todo a anon vip_invitations" ON public.vip_invitations;
+CREATE POLICY "Permitir todo a anon vip_invitations" ON public.vip_invitations FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 `;

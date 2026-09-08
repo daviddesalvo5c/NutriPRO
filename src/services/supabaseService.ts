@@ -182,38 +182,50 @@ export async function supabaseLogin(
   }
 
   try {
-    const { data, error } = await supabase
+    const isFounder = isFounderEmail(cleanEmail);
+
+    // 1. Try profiles table first (the active Supabase table)
+    const { data: profData, error: profError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (profData) {
+      const authUser: AuthUser = {
+        email: profData.email,
+        name: profData.full_name || cleanEmail.split('@')[0],
+        isFounder: Boolean(profData.is_founder || isFounder),
+        tier: isFounder ? 'vip' : 'free',
+        subscribedAt: profData.created_at,
+        createdAt: profData.created_at || new Date().toISOString(),
+      };
+      return { success: true, user: authUser };
+    }
+
+    // 2. Fallback to users table if present
+    const { data: userData } = await supabase
       .from('users')
       .select('*')
       .eq('email', cleanEmail)
       .maybeSingle();
 
-    if (error) {
-      if (error.code !== 'PGRST205') {
-        console.warn('Notice querying Supabase users table:', error.message);
+    if (userData) {
+      if (userData.password && userData.password !== password.trim()) {
+        return { success: false, message: 'Contraseña incorrecta.' };
       }
-      return { success: false, message: 'Usuario no encontrado en Supabase.' };
+      const authUser: AuthUser = {
+        email: userData.email,
+        name: userData.name || cleanEmail.split('@')[0],
+        isFounder: Boolean(userData.is_founder || isFounder),
+        tier: (userData.tier as SubscriptionTier) || (isFounder ? 'vip' : 'free'),
+        subscribedAt: userData.subscribed_at,
+        createdAt: userData.created_at || new Date().toISOString(),
+      };
+      return { success: true, user: authUser };
     }
 
-    if (!data) {
-      return { success: false, message: 'Usuario no encontrado en la base de datos de Supabase.' };
-    }
-
-    // Validate password
-    if (data.password && data.password !== password.trim()) {
-      return { success: false, message: 'Contraseña incorrecta.' };
-    }
-
-    const authUser: AuthUser = {
-      email: data.email,
-      name: data.name,
-      isFounder: Boolean(data.is_founder || isFounderEmail(data.email)),
-      tier: (data.tier as SubscriptionTier) || (isFounderEmail(data.email) ? 'vip' : 'free'),
-      subscribedAt: data.subscribed_at,
-      createdAt: data.created_at || new Date().toISOString(),
-    };
-
-    return { success: true, user: authUser };
+    return { success: false, message: 'Usuario no encontrado en la base de datos de Supabase.' };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn('Supabase login notice:', message);
@@ -236,77 +248,42 @@ export async function supabaseRegister(
   try {
     const isFounder = isFounderEmail(cleanEmail);
     const tier: SubscriptionTier = isFounder ? 'vip' : 'free';
+    const userUuid = emailToUuid(cleanEmail);
 
-    // Check if users table is available
-    const { data: existing, error: checkError } = await supabase
-      .from('users')
-      .select('id, email')
-      .eq('email', cleanEmail)
-      .maybeSingle();
-
-    if (checkError && checkError.code === 'PGRST205') {
-      // users table does not exist in schema cache; save in profiles if available
-      try {
-        await supabase.from('profiles').upsert({
-          id: emailToUuid(cleanEmail),
-          email: cleanEmail,
-          full_name: cleanName,
-          is_founder: isFounder,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'email' });
-      } catch {
-        // ignore
-      }
-
-      const authUser: AuthUser = {
+    // Upsert into profiles table
+    try {
+      await supabase.from('profiles').upsert({
+        id: userUuid,
         email: cleanEmail,
-        name: cleanName,
-        isFounder,
-        tier,
-        createdAt: new Date().toISOString(),
-      };
-      return { success: true, user: authUser };
+        full_name: cleanName,
+        is_founder: isFounder,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'email' });
+    } catch (e) {
+      console.warn('Notice upserting profile in Supabase:', e);
     }
 
-    if (existing) {
-      return { success: false, message: 'Este correo ya está registrado en Supabase.' };
-    }
-
-    const insertPayload = {
-      email: cleanEmail,
-      name: cleanName,
-      password: password.trim(),
-      is_founder: isFounder,
-      tier,
-      created_at: new Date().toISOString(),
-    };
-
-    const { data: created, error: insertError } = await supabase
-      .from('users')
-      .insert([insertPayload])
-      .select()
-      .single();
-
-    if (insertError) {
-      console.warn('Notice inserting user to Supabase:', insertError.message);
-      // Still return local user so registration succeeds smoothly
-      const fallbackUser: AuthUser = {
+    // Also attempt users table if exists
+    try {
+      await supabase.from('users').upsert({
         email: cleanEmail,
         name: cleanName,
-        isFounder,
+        password: password.trim(),
+        is_founder: isFounder,
         tier,
-        createdAt: new Date().toISOString(),
-      };
-      return { success: true, user: fallbackUser };
+        created_at: new Date().toISOString(),
+      }, { onConflict: 'email' });
+    } catch {
+      // ignore
     }
 
     const authUser: AuthUser = {
-      email: created.email,
-      name: created.name,
-      isFounder: Boolean(created.is_founder),
-      tier: (created.tier as SubscriptionTier) || 'free',
-      createdAt: created.created_at,
+      email: cleanEmail,
+      name: cleanName,
+      isFounder,
+      tier,
+      createdAt: new Date().toISOString(),
     };
 
     return { success: true, user: authUser };
@@ -534,10 +511,11 @@ export async function supabaseAddFoodItem(
       }
 
       const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id);
+      const rowId = isValidUuid ? item.id : emailToUuid(`${cleanEmail}_${item.id}_${date}_${item.name}`);
 
-      const payload: Record<string, any> = {
+      const payload = {
+        id: rowId,
         user_id: userUuid,
-        log_date: date,
         food_name: item.name,
         portion_description: item.portionDescription || '',
         amount_grams: item.amountGrams || 0,
@@ -546,15 +524,12 @@ export async function supabaseAddFoodItem(
         carbs: item.carbsGrams || 0,
         fat: item.fatGrams || 0,
         meal_type: item.mealType || 'lunch',
-        created_at: new Date().toISOString(),
+        created_at: `${date}T12:00:00.000Z`,
       };
-      if (isValidUuid) {
-        payload.id = item.id;
-      }
 
-      const { error } = await supabase.from('food_logs').insert([payload]);
+      const { error } = await supabase.from('food_logs').upsert([payload], { onConflict: 'id' });
       if (error) {
-        console.warn('Notice inserting food log in Supabase (local storage handles persistence):', error.message);
+        console.warn('Notice inserting food log in Supabase (profiles/RLS notice):', error.message);
         return false;
       }
       return true;
@@ -609,11 +584,12 @@ export async function supabaseAddMultipleFoods(
         // ignore
       }
 
-      const payload = items.map((item) => {
+      const payload = items.map((item, idx) => {
         const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id);
-        const obj: Record<string, any> = {
+        const rowId = isValidUuid ? item.id : emailToUuid(`${cleanEmail}_${item.id}_${date}_${idx}`);
+        return {
+          id: rowId,
           user_id: userUuid,
-          log_date: date,
           food_name: item.name,
           portion_description: item.portionDescription || '',
           amount_grams: item.amountGrams || 0,
@@ -622,15 +598,11 @@ export async function supabaseAddMultipleFoods(
           carbs: item.carbsGrams || 0,
           fat: item.fatGrams || 0,
           meal_type: item.mealType || 'lunch',
-          created_at: new Date().toISOString(),
+          created_at: `${date}T12:00:00.000Z`,
         };
-        if (isValidUuid) {
-          obj.id = item.id;
-        }
-        return obj;
       });
 
-      const { error } = await supabase.from('food_logs').insert(payload);
+      const { error } = await supabase.from('food_logs').upsert(payload, { onConflict: 'id' });
       if (error) {
         console.warn('Notice bulk-inserting food logs to Supabase:', error.message);
         return false;
@@ -995,7 +967,12 @@ export async function supabaseSaveUserProfile(
         activity_level: profile.activityLevel,
         formula: profile.formula,
         goal: profile.goal,
+        goal_intensity: profile.goalIntensity || 'moderate',
+        custom_targets_enabled: Boolean(profile.customTargetsEnabled),
         target_calories: profile.targetCalories,
+        target_protein: profile.targetProteinGrams,
+        target_carbs: profile.targetCarbsGrams,
+        target_fat: profile.targetFatGrams,
         updated_at: new Date().toISOString(),
       };
 
@@ -1066,12 +1043,12 @@ export async function supabaseFetchUserProfile(email: string): Promise<UserProfi
         activityLevel: data.activity_level || 'moderate',
         formula: data.formula || 'mifflin',
         goal: data.goal || 'deficit',
-        goalIntensity: 'moderate',
-        customTargetsEnabled: false,
+        goalIntensity: data.goal_intensity || 'moderate',
+        customTargetsEnabled: Boolean(data.custom_targets_enabled),
         targetCalories: Number(data.target_calories) || 2000,
-        targetProteinGrams: 140,
-        targetCarbsGrams: 200,
-        targetFatGrams: 55,
+        targetProteinGrams: Number(data.target_protein) || 140,
+        targetCarbsGrams: Number(data.target_carbs) || 200,
+        targetFatGrams: Number(data.target_fat) || 55,
         updatedAt: data.updated_at || new Date().toISOString(),
       };
 
@@ -1108,6 +1085,67 @@ export async function supabaseFetchUserProfile(email: string): Promise<UserProfi
   } catch (err) {
     console.warn('Notice fetching user profile from Supabase:', err);
     return null;
+  }
+}
+
+export async function supabaseCheckWritePermissions(): Promise<{
+  canWrite: boolean;
+  rlsBlocked: boolean;
+  message: string;
+}> {
+  if (!isSupabaseConfigured) {
+    return { canWrite: false, rlsBlocked: false, message: 'Supabase no está configurado.' };
+  }
+
+  try {
+    // Attempt a benign read first
+    const { error: readErr } = await supabase.from('profiles').select('id').limit(1);
+    if (readErr && readErr.code === 'PGRST205') {
+      return { canWrite: false, rlsBlocked: false, message: 'Tabla profiles no encontrada.' };
+    }
+
+    // Probe an upsert with test id
+    const testId = '00000000-0000-0000-0000-000000000000';
+    const { error: writeErr } = await supabase.from('profiles').upsert({
+      id: testId,
+      email: 'ping_test_connection@nutripro.local',
+      full_name: 'NutriFit Diagnostic Ping',
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+
+    if (!writeErr) {
+      // Clean up ping row if allowed
+      try {
+        await supabase.from('profiles').delete().eq('id', testId);
+      } catch {
+        // ignore
+      }
+      return {
+        canWrite: true,
+        rlsBlocked: false,
+        message: 'Conexión y permisos de lectura/escritura verificados en Supabase.',
+      };
+    }
+
+    if (writeErr.code === '42501' || writeErr.message?.includes('row-level security')) {
+      return {
+        canWrite: false,
+        rlsBlocked: true,
+        message: 'Políticas RLS en Supabase bloquean la escritura anónima. Ejecuta el script SQL en el panel para habilitarla.',
+      };
+    }
+
+    return {
+      canWrite: false,
+      rlsBlocked: false,
+      message: `Aviso al escribir en Supabase: ${writeErr.message}`,
+    };
+  } catch (err: any) {
+    return {
+      canWrite: false,
+      rlsBlocked: false,
+      message: `Error al probar permisos en Supabase: ${err.message || String(err)}`,
+    };
   }
 }
 

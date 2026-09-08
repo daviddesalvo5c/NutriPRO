@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Check, 
@@ -13,8 +13,10 @@ import {
   Lock,
   ArrowRight,
   Star,
-  CreditCard,
-  ExternalLink
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 import { SubscriptionTier, UserSession, SubscriptionTransaction } from '../types';
 import { supabaseRecordTransaction, supabaseUpdateUserTier } from '../services/supabaseService';
@@ -39,14 +41,13 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
   onCancelSubscription,
 }) => {
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('annual');
-  const [paymentGateway, setPaymentGateway] = useState<'stripe' | 'mercadopago'>('stripe');
+  const [viewMode, setViewMode] = useState<'plans' | 'waiting_verification' | 'success'>('plans');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [paymentRefInput, setPaymentRefInput] = useState<string>('');
+  const [activePlanActivated, setActivePlanActivated] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  if (!isOpen) return null;
-
-  const isVip = currentTier === 'vip' || session?.isFounder;
-  const isPro = currentTier === 'pro_monthly' || currentTier === 'pro_annual';
 
   // Real Mercado Pago Argentina checkout payment links
   const MP_LINKS = {
@@ -54,60 +55,98 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
     monthly: 'https://mpago.la/33GVesT',
   };
 
-  const handleActivatePro = async (cycle: 'monthly' | 'annual') => {
+  // Check URL params on mount in case user returned from MP redirect
+  useEffect(() => {
+    if (isOpen) {
+      const params = new URLSearchParams(window.location.search);
+      const status = params.get('status') || params.get('collection_status');
+      const paymentId = params.get('payment_id') || params.get('collection_id');
+      if (status === 'approved' && paymentId) {
+        setPaymentRefInput(paymentId);
+        setViewMode('waiting_verification');
+      }
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const isVip = currentTier === 'vip' || session?.isFounder;
+  const isPro = currentTier === 'pro_monthly' || currentTier === 'pro_annual';
+
+  // Step 1: Open Mercado Pago checkout WITHOUT upgrading prematurely
+  const handleOpenMercadoPago = (cycle: 'monthly' | 'annual') => {
+    setBillingCycle(cycle);
     setIsProcessing(true);
-    const plan: 'pro_monthly' | 'pro_annual' = cycle === 'annual' ? 'pro_annual' : 'pro_monthly';
-    const amount = cycle === 'annual' ? 59.99 : 7.99;
+    setVerificationError(null);
+
+    const mpUrl = cycle === 'annual' ? MP_LINKS.annual : MP_LINKS.monthly;
+    window.open(mpUrl, '_blank', 'noopener,noreferrer');
+
+    // Transition to post-payment confirmation screen
+    setTimeout(() => {
+      setIsProcessing(false);
+      setViewMode('waiting_verification');
+    }, 400);
+  };
+
+  // Step 2: Post-payment verification & activation through backend service
+  const handleConfirmAndActivate = async () => {
+    setIsVerifying(true);
+    setVerificationError(null);
+
+    const plan: 'pro_monthly' | 'pro_annual' = billingCycle === 'annual' ? 'pro_annual' : 'pro_monthly';
+    const amount = billingCycle === 'annual' ? 94999 : 12999;
     const userEmail = session?.email || 'usuario@nutrifit.com';
     const userName = session?.name || 'Cliente NutriFit';
-
-    const txId = `tx_${paymentGateway}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-
-    // If Mercado Pago is selected, open the official MP checkout link in a new tab
-    if (paymentGateway === 'mercadopago') {
-      const mpUrl = cycle === 'annual' ? MP_LINKS.annual : MP_LINKS.monthly;
-      window.open(mpUrl, '_blank', 'noopener,noreferrer');
-    }
+    const txRef = paymentRefInput.trim() || `mp_${Date.now()}`;
 
     try {
-      // 1. Record real transaction in Supabase
+      // 1. Verify and update on backend using Service Role
+      const response = await fetch('/api/mercadopago/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: userEmail,
+          plan,
+          billingCycle,
+          paymentId: txRef,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'No se pudo verificar el pago en este momento. Intenta nuevamente.');
+      }
+
+      // 2. Also register transaction locally and in Supabase client
       await supabaseRecordTransaction({
-        id: txId,
+        id: `tx_${txRef}`,
         userEmail,
         userName,
         plan,
-        billingCycle: cycle,
+        billingCycle,
         amount,
         status: 'completed',
         date: new Date().toISOString(),
       });
 
-      // 2. Update user tier in Supabase
-      await supabaseUpdateUserTier(userEmail, plan, cycle);
+      await supabaseUpdateUserTier(userEmail, plan, billingCycle);
+      recordTransaction(userEmail, userName, plan, billingCycle, amount);
 
-      // 3. Keep local fallback in sync
-      recordTransaction(userEmail, userName, plan, cycle, amount);
+      // 3. Update React application tier state
       onSubscribe(plan);
+      setActivePlanActivated(billingCycle === 'annual' ? 'Plan Pro Anual' : 'Plan Pro Mensual');
 
       // 4. Trigger Toast Notification
-      notificationService.notifyPlanUpdated(`Plan Pro ${cycle === 'annual' ? 'Anual' : 'Mensual'}`);
+      notificationService.notifyPlanUpdated(`Plan Pro ${billingCycle === 'annual' ? 'Anual' : 'Mensual'}`);
 
-      setIsProcessing(false);
-      setSuccessMessage(
-        paymentGateway === 'mercadopago'
-          ? `¡Redirigiendo a Mercado Pago Argentina! Se ha registrado tu orden del Plan Pro (${cycle === 'annual' ? 'Anual' : 'Mensual'}).`
-          : `¡Pago procesado con éxito vía Stripe! Tu Plan Pro ya está activo.`
-      );
-      setTimeout(() => {
-        setSuccessMessage(null);
-        onClose();
-      }, 2000);
-    } catch (err) {
-      console.error('Error processing checkout:', err);
-      // Fallback
-      onSubscribe(plan);
-      setIsProcessing(false);
-      onClose();
+      setIsVerifying(false);
+      setViewMode('success');
+    } catch (err: any) {
+      console.error('Error confirming payment:', err);
+      setIsVerifying(false);
+      setVerificationError(err.message || 'Hubo un error al validar la transacción. Por favor reintenta.');
     }
   };
 
@@ -135,113 +174,244 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
           </div>
 
           <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-            Alcanza tus Objetivos sin Límites
+            {viewMode === 'success' 
+              ? '¡Bienvenido a NutriFit Pro!' 
+              : viewMode === 'waiting_verification'
+              ? 'Confirmación y Activación de Pago'
+              : 'Alcanza tus Objetivos sin Límites'}
           </h2>
           <p className="text-white/80 text-sm sm:text-base mt-1.5 max-w-2xl">
-            Desbloquea el análisis de alimentos con IA ilimitado, planificación de comidas semanal, historial completo y reportes clínicos en PDF.
+            {viewMode === 'success'
+              ? 'Tu suscripción ha sido verificada exitosamente. Todas las funciones avanzadas están ahora desbloqueadas.'
+              : viewMode === 'waiting_verification'
+              ? 'Finaliza tu pago en la pasarela oficial de Mercado Pago y confirma la activación de tu cuenta.'
+              : 'Desbloquea el análisis de alimentos con IA ilimitado, planificación de comidas semanal, historial completo y reportes clínicos en PDF.'}
           </p>
 
-          {/* Billing Cycle Switcher & Gateway Selector */}
-          <div className="mt-6 flex flex-wrap items-center gap-3">
-            <div className="inline-flex items-center p-1 rounded-2xl bg-black/25 backdrop-blur-md border border-white/10">
-              <button
-                type="button"
-                id="billing-toggle-monthly"
-                onClick={() => setBillingCycle('monthly')}
-                className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  billingCycle === 'monthly'
-                    ? 'bg-white text-emerald-900 shadow-sm'
-                    : 'text-white/80 hover:text-white'
-                }`}
-              >
-                Facturación Mensual
-              </button>
-              <button
-                type="button"
-                id="billing-toggle-annual"
-                onClick={() => setBillingCycle('annual')}
-                className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  billingCycle === 'annual'
-                    ? 'bg-white text-emerald-900 shadow-sm'
-                    : 'text-white/80 hover:text-white'
-                }`}
-              >
-                <span>Facturación Anual</span>
-                <span className="bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-full uppercase">
-                  Ahorra 37%
-                </span>
-              </button>
-            </div>
+          {/* Billing Cycle Switcher & Gateway Selector (only in plans mode) */}
+          {viewMode === 'plans' && (
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <div className="inline-flex items-center p-1 rounded-2xl bg-black/25 backdrop-blur-md border border-white/10">
+                <button
+                  type="button"
+                  id="billing-toggle-monthly"
+                  onClick={() => setBillingCycle('monthly')}
+                  className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    billingCycle === 'monthly'
+                      ? 'bg-white text-emerald-900 shadow-sm'
+                      : 'text-white/80 hover:text-white'
+                  }`}
+                >
+                  Facturación Mensual
+                </button>
+                <button
+                  type="button"
+                  id="billing-toggle-annual"
+                  onClick={() => setBillingCycle('annual')}
+                  className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    billingCycle === 'annual'
+                      ? 'bg-white text-emerald-900 shadow-sm'
+                      : 'text-white/80 hover:text-white'
+                  }`}
+                >
+                  <span>Facturación Anual</span>
+                  <span className="bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-full uppercase">
+                    Ahorra 39%
+                  </span>
+                </button>
+              </div>
 
-            {/* Gateway Selector */}
-            <div className="inline-flex items-center p-1 rounded-2xl bg-black/25 backdrop-blur-md border border-white/10">
-              <button
-                type="button"
-                onClick={() => setPaymentGateway('stripe')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  paymentGateway === 'stripe'
-                    ? 'bg-white text-indigo-950 shadow-sm'
-                    : 'text-white/80 hover:text-white'
-                }`}
-              >
-                <CreditCard className="w-3.5 h-3.5" />
-                <span>Stripe (Tarjetas)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentGateway('mercadopago')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  paymentGateway === 'mercadopago'
-                    ? 'bg-sky-400 text-sky-950 shadow-sm'
-                    : 'text-white/80 hover:text-white'
-                }`}
-              >
-                <Zap className="w-3.5 h-3.5" />
-                <span>Mercado Pago</span>
-              </button>
+              {/* Gateway indicator: Mercado Pago Argentina */}
+              <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-2xl bg-sky-500/20 text-sky-100 border border-sky-400/30 text-xs font-bold">
+                <Zap className="w-3.5 h-3.5 text-sky-300" />
+                <span>Mercado Pago Argentina</span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
-        {/* Success Banner if upgraded */}
-        {successMessage && (
-          <div className="bg-emerald-500 text-white text-center py-3 px-4 font-bold text-sm flex items-center justify-center gap-2 animate-bounce">
-            <Check className="w-4 h-4" />
-            <span>{successMessage}</span>
-          </div>
-        )}
-
-        {/* VIP User Status Banner */}
-        {isVip && (
-          <div className="mx-6 sm:mx-8 mt-6 p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-amber-600/15 border border-amber-400/40 dark:border-amber-500/30 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-400 text-amber-950 flex items-center justify-center font-black shadow-md">
-                ✦
+        {/* VIEW 1: Waiting / Verification Screen */}
+        {viewMode === 'waiting_verification' && (
+          <div className="p-6 sm:p-8 space-y-6 animate-in fade-in duration-300">
+            <div className="bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 rounded-2xl p-5 flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-sky-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Zap className="w-5 h-5 text-white" />
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-extrabold text-amber-800 dark:text-amber-300 text-sm sm:text-base">
-                    {session?.isFounder ? 'Cuenta de Fundador — Acceso Máximo' : 'Rango Miembro VIP Activo ✦'}
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-400 text-amber-950 font-black text-[10px] uppercase tracking-wider">
-                    Acceso Total Gratuito
-                  </span>
-                </div>
-                <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                  {session?.isFounder
-                    ? 'Tienes acceso total e ilimitado de por vida y control del panel de administración de invitados.'
-                    : 'Has sido invitado como Miembro VIP por el Fundador. Cuentas con todas las funciones Pro sin ningún costo ni vencimiento.'}
+              <div className="space-y-1">
+                <h3 className="font-extrabold text-sm text-sky-950 dark:text-sky-100">
+                  Pasarela Mercado Pago Abierta
+                </h3>
+                <p className="text-xs text-sky-800/80 dark:text-sky-300 leading-relaxed">
+                  Se ha abierto la pasarela oficial de Mercado Pago Argentina para abonar{' '}
+                  <strong className="font-black text-sky-950 dark:text-sky-100">
+                    {billingCycle === 'annual' ? '$94.999 ARS (Plan Anual)' : '$12.999 ARS (Plan Mensual)'}
+                  </strong>
+                  . Puedes abonar con tarjeta de crédito, débito, transferencia bancaria o saldo en cuenta.
                 </p>
               </div>
             </div>
-            <span className="text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 px-3 py-1 rounded-xl border border-amber-300/40">
-              Permanente
-            </span>
+
+            <div className="space-y-4 max-w-lg mx-auto">
+              <div className="bg-zinc-50 dark:bg-zinc-800/60 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-700 space-y-3">
+                <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 block">
+                  Pasos para completar tu activación:
+                </span>
+                <ol className="text-xs text-zinc-600 dark:text-zinc-400 space-y-2 list-decimal list-inside">
+                  <li>Completa el pago en la ventana de Mercado Pago.</li>
+                  <li>Regresa a esta pantalla.</li>
+                  <li>Presiona <strong>"Confirmar y Activar Mi Plan Pro"</strong> para validar el pago y habilitar tu acceso.</li>
+                </ol>
+
+                <div className="pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                  <label className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 block mb-1">
+                    ID de Operación / Comprobante Mercado Pago (opcional):
+                  </label>
+                  <input
+                    type="text"
+                    id="mp-payment-id-input"
+                    value={paymentRefInput}
+                    onChange={(e) => setPaymentRefInput(e.target.value)}
+                    placeholder="Ej. 9876543210"
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {verificationError && (
+                <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                  <span>{verificationError}</span>
+                </div>
+              )}
+
+              <div className="space-y-2 pt-2">
+                <button
+                  type="button"
+                  id="btn-confirm-payment-activation"
+                  onClick={handleConfirmAndActivate}
+                  disabled={isVerifying}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center gap-2 active:scale-98 disabled:opacity-50"
+                >
+                  {isVerifying ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Verificando pago y activando cuenta...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                      <span>Confirmar y Activar Mi Plan Pro</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="flex items-center justify-between gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = billingCycle === 'annual' ? MP_LINKS.annual : MP_LINKS.monthly;
+                      window.open(url, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="text-xs text-sky-600 dark:text-sky-400 font-semibold hover:underline flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Reabrir enlace de Mercado Pago</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('plans')}
+                    className="text-xs text-zinc-500 dark:text-zinc-400 hover:underline"
+                  >
+                    Volver a elegir plan
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Plan Cards Grid */}
-        <div className="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* VIEW 2: Success Confirmation Screen */}
+        {viewMode === 'success' && (
+          <div className="p-6 sm:p-10 text-center space-y-6 animate-in fade-in zoom-in-95 duration-300">
+            <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center border-4 border-emerald-500/20 shadow-lg">
+              <CheckCircle2 className="w-9 h-9 text-emerald-600 dark:text-emerald-400" />
+            </div>
+
+            <div className="max-w-md mx-auto space-y-2">
+              <span className="inline-block px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs font-black uppercase tracking-wider">
+                Suscripción Activa
+              </span>
+              <h3 className="text-2xl font-black text-zinc-900 dark:text-zinc-50">
+                ¡Pago Verificado con Éxito!
+              </h3>
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400">
+                Se ha activado tu <strong>{activePlanActivated || 'Plan Pro'}</strong>. Ahora dispones de escáner ilimitado con IA, menús semanales inteligentes, exportación de reportes clínicos y mucho más.
+              </p>
+            </div>
+
+            <div className="max-w-md mx-auto bg-zinc-50 dark:bg-zinc-800/60 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-700 text-left text-xs space-y-2">
+              <div className="flex items-center justify-between text-zinc-600 dark:text-zinc-300">
+                <span>Estado de cuenta:</span>
+                <strong className="text-emerald-600 dark:text-emerald-400">NutriFit Pro (Ilimitado)</strong>
+              </div>
+              <div className="flex items-center justify-between text-zinc-600 dark:text-zinc-300">
+                <span>Método de pago:</span>
+                <span>Mercado Pago Argentina</span>
+              </div>
+              <div className="flex items-center justify-between text-zinc-600 dark:text-zinc-300">
+                <span>Ciclo facturación:</span>
+                <span>{billingCycle === 'annual' ? 'Anual ($94.999 ARS)' : 'Mensual ($12.999 ARS)'}</span>
+              </div>
+            </div>
+
+            <div className="max-w-md mx-auto pt-2">
+              <button
+                type="button"
+                id="btn-close-success-modal"
+                onClick={onClose}
+                className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm shadow-md transition-all active:scale-98"
+              >
+                ¡Comenzar a Disfrutar NutriFit Pro!
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 3: Standard Plans View */}
+        {viewMode === 'plans' && (
+          <>
+            {/* VIP User Status Banner */}
+            {isVip && (
+              <div className="mx-6 sm:mx-8 mt-6 p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-amber-600/15 border border-amber-400/40 dark:border-amber-500/30 flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-400 text-amber-950 flex items-center justify-center font-black shadow-md">
+                    ✦
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-extrabold text-amber-800 dark:text-amber-300 text-sm sm:text-base">
+                        {session?.isFounder ? 'Cuenta de Fundador — Acceso Máximo' : 'Rango Miembro VIP Activo ✦'}
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-400 text-amber-950 font-black text-[10px] uppercase tracking-wider">
+                        Acceso Total Gratuito
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                      {session?.isFounder
+                        ? 'Tienes acceso total e ilimitado de por vida y control del panel de administración de invitados.'
+                        : 'Has sido invitado como Miembro VIP por el Fundador. Cuentas con todas las funciones Pro sin ningún costo ni vencimiento.'}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 px-3 py-1 rounded-xl border border-amber-300/40">
+                  Permanente
+                </span>
+              </div>
+            )}
+
+            {/* Plan Cards Grid (2 cards for public, 3 for internal VIP/founder) */}
+        <div className={`p-6 sm:p-8 grid grid-cols-1 ${isVip ? 'md:grid-cols-3' : 'md:grid-cols-2 max-w-3xl mx-auto'} gap-6`}>
           {/* Card 1: Plan Gratuito */}
           <div className={`rounded-2xl border p-5 flex flex-col justify-between transition-all ${
             currentTier === 'free' && !isVip
@@ -262,7 +432,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
               <h3 className="text-xl font-black text-zinc-900 dark:text-zinc-50">Plan Gratuito</h3>
               <div className="mt-3 mb-5">
                 <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">$0</span>
-                <span className="text-xs text-zinc-500 dark:text-zinc-400 ml-1">para siempre</span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400 ml-1">ARS para siempre</span>
               </div>
 
               <ul className="space-y-3 text-xs text-zinc-600 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-700 pt-4">
@@ -304,7 +474,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
             </div>
           </div>
 
-          {/* Card 2: Plan Pro (Destacado) */}
+          {/* Card 2: Plan Pro (Destacado en ARS) */}
           <div className={`rounded-2xl border-2 p-5 flex flex-col justify-between relative shadow-lg ${
             isPro && !isVip
               ? 'border-emerald-600 bg-emerald-50/30 dark:bg-emerald-950/20 ring-2 ring-emerald-500'
@@ -336,21 +506,21 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                 {billingCycle === 'annual' ? (
                   <div>
                     <div className="flex items-baseline gap-1">
-                      <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">$59.99</span>
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400">/ año</span>
+                      <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">$94.999</span>
+                      <span className="text-xs font-bold text-zinc-600 dark:text-zinc-400">ARS / año</span>
                     </div>
                     <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                      Equivalente a solo $4.99/mes
+                      Equivalente a solo ~$7.916 ARS/mes (¡Ahorra 39%!)
                     </span>
                   </div>
                 ) : (
                   <div>
                     <div className="flex items-baseline gap-1">
-                      <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">$7.99</span>
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400">/ mes</span>
+                      <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">$12.999</span>
+                      <span className="text-xs font-bold text-zinc-600 dark:text-zinc-400">ARS / mes</span>
                     </div>
                     <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                      Cancela en cualquier momento
+                      Cancela o renueva cuando quieras
                     </span>
                   </div>
                 )}
@@ -418,18 +588,19 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                 <button
                   type="button"
                   id="btn-subscribe-pro"
-                  onClick={() => handleActivatePro(billingCycle)}
+                  onClick={() => handleOpenMercadoPago(billingCycle)}
                   disabled={isProcessing}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.98] text-white text-xs font-extrabold shadow-md transition-all flex items-center justify-center gap-1.5"
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 active:scale-[0.98] text-white text-xs font-extrabold shadow-md transition-all flex items-center justify-center gap-1.5"
                 >
                   {isProcessing ? (
                     <span className="flex items-center gap-2">
                       <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Procesando pago con {paymentGateway === 'stripe' ? 'Stripe' : 'Mercado Pago'}...</span>
+                      <span>Abriendo Mercado Pago...</span>
                     </span>
                   ) : (
                     <>
-                      <span>Pagar ${billingCycle === 'annual' ? '59.99 USD/año' : '7.99 USD/mes'} con {paymentGateway === 'stripe' ? 'Stripe' : 'Mercado Pago'}</span>
+                      <Zap className="w-4 h-4 text-sky-200 fill-sky-200" />
+                      <span>Pagar {billingCycle === 'annual' ? '$94.999 ARS/año' : '$12.999 ARS/mes'} con Mercado Pago</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
@@ -438,75 +609,69 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
             </div>
           </div>
 
-          {/* Card 3: Miembro VIP (Exclusivo) */}
-          <div className="rounded-2xl border border-amber-300 dark:border-amber-800 bg-gradient-to-b from-amber-50/50 via-yellow-50/20 to-amber-50/40 dark:from-amber-950/20 dark:via-zinc-900 dark:to-amber-950/10 p-5 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
-                  Por Invitación
-                </span>
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-400 text-amber-950 uppercase tracking-wider">
-                  Gratuito
-                </span>
-              </div>
-              <h3 className="text-xl font-black text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-                <span>Miembro VIP</span>
-                <span className="text-amber-500">✦</span>
-              </h3>
-
-              <div className="mt-3 mb-5">
-                <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-black text-amber-900 dark:text-amber-200">$0</span>
-                  <span className="text-xs text-amber-700 dark:text-amber-400">/ 100% libre</span>
+          {/* Card 3: Miembro VIP (Acceso restringido interno, oculto para el público general) */}
+          {isVip && (
+            <div className="rounded-2xl border border-amber-300 dark:border-amber-800 bg-gradient-to-b from-amber-50/50 via-yellow-50/20 to-amber-50/40 dark:from-amber-950/20 dark:via-zinc-900 dark:to-amber-950/10 p-5 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                    Acceso Interno
+                  </span>
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-400 text-amber-950 uppercase tracking-wider">
+                    Privado
+                  </span>
                 </div>
-                <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">
-                  Asignado exclusivamente por el Fundador
-                </span>
+                <h3 className="text-xl font-black text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                  <span>Miembro VIP</span>
+                  <span className="text-amber-500">✦</span>
+                </h3>
+
+                <div className="mt-3 mb-5">
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-3xl font-black text-amber-900 dark:text-amber-200">$0</span>
+                    <span className="text-xs text-amber-700 dark:text-amber-400">/ Acceso Interno</span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+                    Visible exclusivamente para Fundador y Miembros VIP
+                  </span>
+                </div>
+
+                <ul className="space-y-3 text-xs text-zinc-700 dark:text-zinc-300 border-t border-amber-200 dark:border-amber-900/50 pt-4">
+                  <li className="flex items-start gap-2">
+                    <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
+                    <span><strong>Acceso 100% ilimitado</strong> a todas las herramientas Pro</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
+                    <span><strong>Insignia dorada "Miembro VIP ✦"</strong></span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
+                    <span>Sin fechas de expiración ni cobros</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
+                    <span>Escáner IA sin cuotas diarias</span>
+                  </li>
+                </ul>
               </div>
 
-              <ul className="space-y-3 text-xs text-zinc-700 dark:text-zinc-300 border-t border-amber-200 dark:border-amber-900/50 pt-4">
-                <li className="flex items-start gap-2">
-                  <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
-                  <span><strong>Acceso 100% ilimitado y gratuito</strong> a todas las herramientas Pro</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
-                  <span><strong>Insignia dorada distintiva "Miembro VIP ✦"</strong></span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
-                  <span>Sin fechas de expiración ni cobros periódicos</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
-                  <span>Escáner IA sin cuotas diarias</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Star className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0 mt-0.5" />
-                  <span>Acceso anticipado a nuevas actualizaciones</span>
-                </li>
-              </ul>
-            </div>
-
-            <div className="mt-6 pt-3">
-              {isVip ? (
+              <div className="mt-6 pt-3">
                 <div className="w-full py-2.5 rounded-xl bg-amber-400 text-amber-950 font-black text-xs text-center shadow-xs">
                   ✦ Eres Miembro VIP
                 </div>
-              ) : (
-                <div className="p-2.5 rounded-xl bg-amber-100/70 dark:bg-amber-950/40 text-center border border-amber-200 dark:border-amber-800/40 text-[11px] text-amber-800 dark:text-amber-300 font-medium">
-                  Solicita una invitación al Fundador (David De Salvo) para ser agregado como VIP.
-                </div>
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
+        </>
+      )}
 
         {/* Footer Guarantee / Information */}
         <div className="bg-zinc-50 dark:bg-zinc-800/50 border-t border-zinc-200 dark:border-zinc-800 px-6 sm:px-8 py-4 flex items-center justify-between flex-wrap gap-3 text-xs text-zinc-500 dark:text-zinc-400">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Transacciones simuladas locales seguras. Sin comisiones ocultas.</span>
+            <span>Transacciones seguras procesadas por Mercado Pago Argentina en Pesos Argentinos (ARS).</span>
           </div>
           <button
             type="button"

@@ -390,7 +390,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
                 Has alcanzado el límite diario de 3 escaneos con IA
               </h3>
               <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                El Plan Gratuito incluye 3 escaneos diarios. Pasa a NutriFit Pro o solicita acceso VIP para escanear ilimitadamente y desbloquear el generador de menús.
+                El Plan Gratuito incluye 3 escaneos diarios. Pasa a NutriFit Pro para escanear ilimitadamente y desbloquear el generador de menús.
               </p>
             </div>
           </div>
@@ -402,7 +402,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
             className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md shrink-0 flex items-center gap-1.5 transition-transform hover:scale-105"
           >
             <Sparkles className="w-4 h-4 text-amber-300" />
-            <span>Actualizar a Pro ($7.99/mes)</span>
+            <span>Actualizar a Pro ($12.999 ARS/mes)</span>
           </button>
         </div>
       )}

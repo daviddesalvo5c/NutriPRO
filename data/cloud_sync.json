@@ -1,0 +1,28 @@
+{
+  "users": {},
+  "userData": {
+    "daviddesalvo.5c@gmail.com": {
+      "email": "daviddesalvo.5c@gmail.com",
+      "name": "David Desalvo",
+      "tier": "vip",
+      "profile": {},
+      "dailyLogs": {
+        "2026-09-08": {
+          "date": "2026-09-08",
+          "waterMl": 1500,
+          "items": []
+        }
+      },
+      "weightHistory": [],
+      "measurements": [],
+      "progressPhotos": [],
+      "updatedAt": "2026-09-08T19:35:31.015Z"
+    }
+  },
+  "syncCodes": {
+    "668291": {
+      "email": "daviddesalvo.5c@gmail.com",
+      "expiresAt": 1788897036515
+    }
+  }
+}

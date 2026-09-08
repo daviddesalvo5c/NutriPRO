@@ -32,6 +32,7 @@ import {
   UserSession
 } from '../types';
 import { FounderManagementPanel } from './FounderManagementPanel';
+import { DeviceSyncCard } from './DeviceSyncCard';
 import { isFounderEmail } from '../utils/storage';
 import { 
   ACTIVITY_OPTIONS, 
@@ -52,6 +53,7 @@ interface UserProfileSectionProps {
   session?: UserSession | null;
   currentTier?: SubscriptionTier;
   onOpenPlansModal?: () => void;
+  onRefreshUserData?: () => void;
 }
 
 export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
@@ -61,6 +63,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
   session = null,
   currentTier = 'free',
   onOpenPlansModal,
+  onRefreshUserData,
 }) => {
   // Local form state
   const [formData, setFormData] = useState<UserProfile>({ ...profile });
@@ -380,7 +383,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
                     ? 'Ver Beneficios VIP'
                     : currentTier === 'pro_monthly' || currentTier === 'pro_annual'
                     ? 'Administrar Plan'
-                    : 'Actualizar a Pro ($7.99/m)'}
+                    : 'Actualizar a Pro ($12.999 ARS/mes)'}
                 </span>
               </button>
             )}
@@ -1067,6 +1070,15 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Sincronización en la Nube y entre Dispositivos (Móvil ↔ PC) */}
+      {session && (
+        <DeviceSyncCard 
+          session={session} 
+          profile={formData} 
+          onRefreshUserData={onRefreshUserData} 
+        />
+      )}
 
       {/* Módulo Exclusivo de Gestión de Invitados VIP & Métricas (SOLO FUNDADOR: daviddesalvo.5c@gmail.com) */}
       {isFounderEmail(session?.email) && session?.email && (

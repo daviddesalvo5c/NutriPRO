@@ -142,3 +142,40 @@ export interface UserSession {
   tier?: SubscriptionTier;
 }
 
+// -------------------------------------------------------------
+// Activity & Workout Types
+// -------------------------------------------------------------
+export type WorkoutCategory =
+  | 'running'
+  | 'outdoor_walk'
+  | 'yoga'
+  | 'gym'
+  | 'cycling'
+  | 'swimming'
+  | 'hiit'
+  | 'pilates'
+  | 'boxing'
+  | 'dancing'
+  | 'other';
+
+export interface WorkoutItem {
+  id: string;
+  type: WorkoutCategory;
+  typeName: string;
+  durationMinutes: number;
+  caloriesBurned: number;
+  timeAdded: string; // HH:MM
+  notes?: string;
+  date: string; // YYYY-MM-DD
+}
+
+export interface ActivityDayLog {
+  date: string; // YYYY-MM-DD
+  connectedService: 'apple_health' | 'google_fit' | null;
+  syncedSteps: number;
+  syncedCalories: number;
+  lastSyncedAt?: string;
+  workouts: WorkoutItem[];
+}
+
+

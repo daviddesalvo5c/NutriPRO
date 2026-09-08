@@ -453,8 +453,8 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
               <Lock className="w-7 h-7" />
             </div>
             <div className="max-w-lg mx-auto">
-              <span className="text-[11px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-3 py-1 rounded-full border border-amber-300/60">
-                Función Exclusiva Pro & VIP
+              <span className="text-[11px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-3 py-1 rounded-full border border-emerald-300/60">
+                Función Exclusiva NutriFit Pro
               </span>
               <h2 className="text-xl font-black text-zinc-900 dark:text-zinc-100 mt-2">
                 Generador de Menús Inteligentes con IA
@@ -473,7 +473,7 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 hover:scale-105"
                 >
                   <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>Actualizar a NutriFit Pro ($7.99/mes)</span>
+                  <span>Actualizar a NutriFit Pro ($12.999 ARS/mes)</span>
                 </button>
               )}
               <button
@@ -713,8 +713,8 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
               <Lock className="w-7 h-7" />
             </div>
             <div className="max-w-lg mx-auto">
-              <span className="text-[11px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-3 py-1 rounded-full border border-amber-300/60">
-                Función Exclusiva Pro & VIP
+              <span className="text-[11px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-3 py-1 rounded-full border border-emerald-300/60">
+                Función Exclusiva NutriFit Pro
               </span>
               <h2 className="text-xl font-black text-zinc-900 dark:text-zinc-100 mt-2">
                 Lista de la Compra Automática
@@ -733,7 +733,7 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 hover:scale-105"
                 >
                   <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>Actualizar a NutriFit Pro ($7.99/mes)</span>
+                  <span>Actualizar a NutriFit Pro ($12.999 ARS/mes)</span>
                 </button>
               )}
               <button

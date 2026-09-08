@@ -156,9 +156,9 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
   const freeUsersCount = users.filter((u) => u.tier === 'free' || !u.tier).length;
 
   // Monthly Recurring Revenue (MRR)
-  // Monthly plan: $7.99, Annual plan: $59.99 / 12 = $4.999/month
-  const mrr = Number(((proMonthlyUsers * 7.99) + (proAnnualUsers * (59.99 / 12))).toFixed(2));
-  const arr = Number((mrr * 12).toFixed(2));
+  // Monthly plan: $12.999 ARS, Annual plan: $94.999 ARS / 12 = ~$7.916 ARS/month
+  const mrr = Math.round((proMonthlyUsers * 12999) + (proAnnualUsers * (94999 / 12)));
+  const arr = mrr * 12;
 
   // Pie chart distribution data
   const distributionData = [
@@ -304,11 +304,11 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
             </div>
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">${mrr}</span>
-            <span className="text-xs font-semibold text-zinc-400">USD/mes</span>
+            <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">${mrr.toLocaleString('es-AR')}</span>
+            <span className="text-xs font-semibold text-zinc-400">ARS/mes</span>
           </div>
           <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1 block">
-            ARR Proyectado: ${arr} USD/año
+            ARR Proyectado: ${arr.toLocaleString('es-AR')} ARS/año
           </span>
         </div>
       </div>
@@ -672,11 +672,11 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
                           ? 'bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300 border border-teal-300'
                           : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300'
                       }`}>
-                        {tx.plan === 'pro_annual' ? 'Pro Anual ($59.99)' : 'Pro Mensual ($7.99)'}
+                        {tx.plan === 'pro_annual' ? 'Pro Anual ($94.999 ARS)' : 'Pro Mensual ($12.999 ARS)'}
                       </span>
                     </td>
                     <td className="py-3 px-4 font-extrabold text-emerald-600 dark:text-emerald-400">
-                      ${tx.amount.toFixed(2)} USD
+                      ${Number(tx.amount).toLocaleString('es-AR')} {tx.currency || 'ARS'}
                     </td>
                     <td className="py-3 px-4 text-right">
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md">

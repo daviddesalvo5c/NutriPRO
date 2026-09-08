@@ -8,7 +8,9 @@ import {
   BodyMeasurementEntry,
   ProgressPhotoEntry,
   SubscriptionTier,
-  SubscriptionTransaction
+  SubscriptionTransaction,
+  ActivityDayLog,
+  WorkoutItem
 } from '../types';
 import { calculateBMR, calculateSuggestedMacros, calculateTDEE, getCalorieAdjustment } from './nutritionCalculations';
 
@@ -550,7 +552,7 @@ export function setUserTier(
 
   // Record a transaction if it's a paid upgrade
   if (tier === 'pro_monthly' || tier === 'pro_annual') {
-    const amount = tier === 'pro_annual' ? 59.99 : 7.99;
+    const amount = tier === 'pro_annual' ? 94999 : 12999;
     recordTransaction(
       normalized, 
       userName || (index !== -1 ? users[index].name : 'Usuario'),
@@ -776,5 +778,57 @@ export function recordSubscriptionTransaction(params: {
   const plan: 'pro_monthly' | 'pro_annual' = params.tier === 'pro_annual' ? 'pro_annual' : 'pro_monthly';
   return recordTransaction(params.userEmail, params.userName, plan, params.billingCycle, params.amount);
 }
+
+// -------------------------------------------------------------
+// Activity Logs & Caloric Discount Persistence
+// -------------------------------------------------------------
+const ACTIVITY_LOGS_PREFIX = 'nutrifit_activity_logs';
+const ACTIVITY_DISCOUNT_PREFIX = 'nutrifit_activity_discount_pref';
+
+export function loadActivityLogsForUser(email: string): Record<string, ActivityDayLog> {
+  if (typeof window === 'undefined' || !email) return {};
+  try {
+    const key = getUserStorageKey(ACTIVITY_LOGS_PREFIX, email);
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Error loading activity logs:', err);
+    return {};
+  }
+}
+
+export function saveActivityLogsForUser(email: string, logs: Record<string, ActivityDayLog>): void {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    const key = getUserStorageKey(ACTIVITY_LOGS_PREFIX, email);
+    localStorage.setItem(key, JSON.stringify(logs));
+  } catch (err) {
+    console.error('Error saving activity logs:', err);
+  }
+}
+
+export function loadDiscountActivityCaloriesPreference(email: string): boolean {
+  if (typeof window === 'undefined' || !email) return true; // Default enabled as requested
+  try {
+    const key = getUserStorageKey(ACTIVITY_DISCOUNT_PREFIX, email);
+    const raw = localStorage.getItem(key);
+    if (raw === null) return true;
+    return raw === 'true';
+  } catch {
+    return true;
+  }
+}
+
+export function saveDiscountActivityCaloriesPreference(email: string, enabled: boolean): void {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    const key = getUserStorageKey(ACTIVITY_DISCOUNT_PREFIX, email);
+    localStorage.setItem(key, String(enabled));
+  } catch (err) {
+    console.error('Error saving discount activity pref:', err);
+  }
+}
+
 
 
