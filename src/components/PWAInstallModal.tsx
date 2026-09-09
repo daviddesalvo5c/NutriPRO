@@ -133,7 +133,7 @@ export const PWAInstallModal: React.FC<PWAInstallModalProps> = ({
               </div>
               <div className="text-left">
                 <div className="text-xs font-bold text-white">Sincronización Segura</div>
-                <div className="text-[11px] text-zinc-400">Datos privados guardados y sincronizados con tu cuenta Supabase.</div>
+                <div className="text-[11px] text-zinc-400">Datos privados guardados y sincronizados en la nube automáticamente.</div>
               </div>
             </div>
           </div>

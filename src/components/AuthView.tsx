@@ -283,17 +283,11 @@ export const AuthView: React.FC<AuthViewProps> = ({
             size="lg" 
             showSubtitle={true} 
             subtitleText="Calculadora Nutricional & Perfil de Usuario"
-            badgeText="Sincronización Automática"
           />
 
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-2 max-w-xs mx-auto leading-relaxed">
-            Inicia sesión para sincronizar automáticamente tu diario, metas y progreso entre móvil y PC.
+            Inicia sesión para acceder a tu diario nutricional, metas metabólicas y seguimiento de progreso.
           </p>
-
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-[11px] text-emerald-700 dark:text-emerald-300 mt-3 font-medium shadow-inner">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Sincronización 100% nativa con Supabase</span>
-          </div>
         </div>
 
         {/* 2 Tabs: Entrar y Registro */}

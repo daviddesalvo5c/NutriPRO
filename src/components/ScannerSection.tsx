@@ -18,11 +18,24 @@ import {
   ChevronRight,
   FileImage,
   Lock,
-  Crown
+  Crown,
+  Barcode,
+  Search,
+  Cookie,
+  Package
 } from 'lucide-react';
 import { FoodItem, MealType, SubscriptionTier } from '../types';
 import { canUserPerformAiScan, incrementTodayAiScansCount, hasUserProAccess } from '../utils/storage';
 import { downscaleImage } from '../utils/image';
+import { 
+  detectBarcodeFromImage, 
+  fetchProductFromOpenFoodFacts, 
+  analyzePackageWithAI, 
+  calculatePortionFromProduct, 
+  PackageProductResult 
+} from '../services/barcodeService';
+import { formatGrams, roundGrams } from '../utils/nutritionCalculations';
+import { ARGENTINE_FOOD_DATABASE } from '../data/argentineFoodDatabase';
 
 interface ScannerSectionProps {
   onAddFoodToDiary: (item: Omit<FoodItem, 'id'>, mealType: MealType) => void;
@@ -58,7 +71,14 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
 
   // Stages: 'viewfinder' | 'analyzing' | 'result'
   const [stage, setStage] = useState<'viewfinder' | 'analyzing' | 'error' | 'result'>('viewfinder');
-  
+
+  // Scanner Mode: 'plate' (foto de plato con IA) vs 'barcode' (código de barras y paquetes/galletitas)
+  const [scanMode, setScanMode] = useState<'plate' | 'barcode'>('plate');
+  const [packageResult, setPackageResult] = useState<PackageProductResult | null>(null);
+  const [cookieUnitCount, setCookieUnitCount] = useState<number>(4);
+  const [manualBarcodeInput, setManualBarcodeInput] = useState<string>('');
+  const [isBarcodeSearching, setIsBarcodeSearching] = useState<boolean>(false);
+
   // Camera & Device states
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -211,6 +231,171 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
     }
   };
 
+  // Process captured image for barcode & package analysis
+  const processBarcodeImage = async (base64Image: string) => {
+    // Check scan limits for Free users
+    const currentQuota = canUserPerformAiScan(userEmail, currentTier);
+    if (!currentQuota.allowed) {
+      if (onOpenPlansModal) onOpenPlansModal();
+      return;
+    }
+
+    setCapturedImage(base64Image);
+    setStage('analyzing');
+    setAnalysisError(null);
+    setAnalysisStatus('Buscando código de barras en el paquete...');
+
+    try {
+      // 1. Crear un elemento de imagen temporal para intentar decodificar código de barras
+      const img = new Image();
+      img.src = base64Image;
+      await new Promise((resolve) => {
+        img.onload = resolve;
+        img.onerror = resolve;
+      });
+
+      const detectedBarcode = await detectBarcodeFromImage(img);
+
+      if (detectedBarcode) {
+        setAnalysisStatus(`Código de barras detectado (${detectedBarcode}). Buscando datos en Open Food Facts...`);
+        const offProduct = await fetchProductFromOpenFoodFacts(detectedBarcode);
+        if (offProduct) {
+          setPackageResult(offProduct);
+          setCookieUnitCount(4);
+          setStage('result');
+          if (!isProOrVip && userEmail) incrementTodayAiScansCount(userEmail);
+          return;
+        }
+      }
+
+      // 2. Si no hay código en la base internacional o en la foto, analizar paquete y tabla nutricional con IA
+      setAnalysisStatus('Analizando tabla nutricional, porciones y unidades del paquete con IA...');
+      const compact = await downscaleImage(base64Image);
+      const aiProduct = await analyzePackageWithAI({
+        image: compact,
+        barcode: detectedBarcode || undefined,
+      });
+
+      setPackageResult(aiProduct);
+      setCookieUnitCount(4);
+      setStage('result');
+
+      if (!isProOrVip && userEmail) {
+        incrementTodayAiScansCount(userEmail);
+      }
+    } catch (err: any) {
+      console.error('Package barcode analysis failed:', err);
+      setAnalysisError(
+        err?.message || 'No se pudo leer el código o identificar el paquete. Puedes buscarlo por nombre o número de barras.'
+      );
+      setStage('error');
+    }
+  };
+
+  // Manual search or barcode input lookup
+  const handleManualSearch = async (queryParam?: string) => {
+    const query = (queryParam || manualBarcodeInput).trim();
+    if (!query) return;
+
+    setIsBarcodeSearching(true);
+    setAnalysisError(null);
+
+    try {
+      // Si es un código numérico (ej: 7790040133036)
+      if (/^\d{6,14}$/.test(query)) {
+        const off = await fetchProductFromOpenFoodFacts(query);
+        if (off) {
+          setPackageResult(off);
+          setCookieUnitCount(4);
+          setStage('result');
+          setIsBarcodeSearching(false);
+          return;
+        }
+      }
+
+      // Buscar en base local argentina
+      const qLower = query.toLowerCase();
+      const localMatch = ARGENTINE_FOOD_DATABASE.find(
+        (f) =>
+          f.name.toLowerCase().includes(qLower) ||
+          f.tags.some((t) => t.toLowerCase().includes(qLower))
+      );
+
+      if (localMatch) {
+        const unitName = localMatch.unitName.includes('gallet')
+          ? 'galletitas'
+          : localMatch.unitName.includes('alfajor')
+          ? 'alfajores'
+          : localMatch.unitName.includes('barrita')
+          ? 'barritas'
+          : 'unidades';
+        const gramsPerUnit = localMatch.gramsPerUnit || 10;
+        const calsPerUnit = Math.round((localMatch.per100g.calories * gramsPerUnit) / 100);
+        const protPerUnit = Number(((localMatch.per100g.protein * gramsPerUnit) / 100).toFixed(2));
+        const carbsPerUnit = Number(((localMatch.per100g.carbs * gramsPerUnit) / 100).toFixed(2));
+        const fatPerUnit = Number(((localMatch.per100g.fat * gramsPerUnit) / 100).toFixed(2));
+
+        const pkg: PackageProductResult = {
+          productName: localMatch.name,
+          brand: 'Base de Alimentos',
+          unitName,
+          unitsPerServing: localMatch.defaultUnitCount || 3,
+          gramsPerUnit,
+          caloriesPerUnit: calsPerUnit,
+          proteinPerUnit: protPerUnit,
+          carbsPerUnit: carbsPerUnit,
+          fatPerUnit: fatPerUnit,
+          caloriesPer100g: localMatch.per100g.calories,
+          proteinPer100g: localMatch.per100g.protein,
+          carbsPer100g: localMatch.per100g.carbs,
+          fatPer100g: localMatch.per100g.fat,
+          servingLabel: `Porción estimada: ${localMatch.gramsPerUnit * (localMatch.defaultUnitCount || 1)}g`,
+          confidence: 98,
+          notes: 'Datos validados de composición nutricional argentina.',
+          source: 'database',
+        };
+
+        setPackageResult(pkg);
+        setCookieUnitCount(4);
+        setStage('result');
+        setIsBarcodeSearching(false);
+        return;
+      }
+
+      // Fallback a análisis IA por texto/nombre del paquete
+      const aiPkg = await analyzePackageWithAI({ productHint: query });
+      setPackageResult(aiPkg);
+      setCookieUnitCount(4);
+      setStage('result');
+    } catch (err: any) {
+      console.warn('Manual search error:', err);
+      alert(err.message || 'No se encontró el producto. Prueba con otro nombre o código.');
+    } finally {
+      setIsBarcodeSearching(false);
+    }
+  };
+
+  // Confirm and save package portion to diary
+  const handleConfirmPackagePortion = () => {
+    if (!packageResult) return;
+    const calc = calculatePortionFromProduct(packageResult, cookieUnitCount);
+
+    const foodItem: Omit<FoodItem, 'id'> = {
+      name: `${packageResult.productName} (${packageResult.brand})`,
+      portionDescription: `${calc.unitCount} ${calc.unitName} (${formatGrams(calc.totalGrams)}g)`,
+      amountGrams: roundGrams(calc.totalGrams),
+      calories: calc.calories,
+      proteinGrams: calc.proteinGrams,
+      carbsGrams: calc.carbsGrams,
+      fatGrams: calc.fatGrams,
+      mealType: selectedMeal,
+      timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    onAddFoodToDiary(foodItem, selectedMeal);
+    onNavigateToDiary();
+  };
+
   // Shutter button capture from camera video stream
   const handleCaptureShutter = () => {
     setFlashEffect(true);
@@ -233,7 +418,12 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       // Draw current video frame to canvas
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-      processImage(dataUrl);
+
+      if (scanMode === 'barcode') {
+        processBarcodeImage(dataUrl);
+      } else {
+        processImage(dataUrl);
+      }
     } catch (err) {
       console.error('Shutter capture failed:', err);
       fileInputRef.current?.click();
@@ -248,7 +438,11 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
-      processImage(dataUrl);
+      if (scanMode === 'barcode') {
+        processBarcodeImage(dataUrl);
+      } else {
+        processImage(dataUrl);
+      }
     };
     reader.readAsDataURL(file);
     // Reset file input so same file can be selected again
@@ -264,7 +458,11 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
-        processImage(dataUrl);
+        if (scanMode === 'barcode') {
+          processBarcodeImage(dataUrl);
+        } else {
+          processImage(dataUrl);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -275,14 +473,14 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
     if (!result) return;
 
     const scaledCalories = Math.round(result.calories * portionMultiplier);
-    const scaledProtein = Math.round(result.protein * portionMultiplier);
-    const scaledCarbs = Math.round(result.carbs * portionMultiplier);
-    const scaledFat = Math.round(result.fat * portionMultiplier);
-    const scaledWeight = Math.round(result.weightGrams * portionMultiplier);
+    const scaledProtein = roundGrams(result.protein * portionMultiplier);
+    const scaledCarbs = roundGrams(result.carbs * portionMultiplier);
+    const scaledFat = roundGrams(result.fat * portionMultiplier);
+    const scaledWeight = roundGrams(result.weightGrams * portionMultiplier);
 
     const foodItem: Omit<FoodItem, 'id'> = {
       name: editableDishName.trim() || result.name,
-      portionDescription: `Escáner IA (${scaledWeight}g · ${result.category})`,
+      portionDescription: `Escáner IA (${formatGrams(scaledWeight)}g · ${result.category})`,
       amountGrams: scaledWeight,
       calories: scaledCalories,
       proteinGrams: scaledProtein,
@@ -300,13 +498,20 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
   const handleReset = () => {
     setCapturedImage(null);
     setResult(null);
+    setPackageResult(null);
     setAnalysisError(null);
     setStage('viewfinder');
   };
 
   // Retry the analysis with the same photo, sin volver a sacarla
   const handleRetryAnalysis = () => {
-    if (capturedImage) processImage(capturedImage);
+    if (capturedImage) {
+      if (scanMode === 'barcode' || packageResult) {
+        processBarcodeImage(capturedImage);
+      } else {
+        processImage(capturedImage);
+      }
+    }
   };
 
   return (
@@ -376,6 +581,49 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
             </button>
           )}
         </div>
+      </div>
+
+      {/* Mode Switcher Tabs */}
+      <div className="flex p-1.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/60 max-w-lg mx-auto shadow-xs">
+        <button
+          type="button"
+          id="tab-scanner-mode-plate"
+          onClick={() => {
+            setScanMode('plate');
+            if (stage === 'result' && packageResult) {
+              setPackageResult(null);
+              setStage('viewfinder');
+            }
+          }}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            scanMode === 'plate'
+              ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-sm'
+              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+          }`}
+        >
+          <Camera className="w-4 h-4" />
+          <span>Plato de Comida (IA)</span>
+        </button>
+
+        <button
+          type="button"
+          id="tab-scanner-mode-barcode"
+          onClick={() => {
+            setScanMode('barcode');
+            if (stage === 'result' && result) {
+              setResult(null);
+              setStage('viewfinder');
+            }
+          }}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            scanMode === 'barcode'
+              ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-sm'
+              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+          }`}
+        >
+          <Barcode className="w-4 h-4" />
+          <span>Código de Barras y Paquetes</span>
+        </button>
       </div>
 
       {/* Free tier limit reached banner */}
@@ -498,14 +746,26 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
                     <div className="w-8 h-8 border-t-2 border-r-2 border-emerald-400 rounded-tr-lg shadow-xs" />
                   </div>
 
-                  {/* Center Target Crosshair */}
+                  {/* Center Target Crosshair or Barcode Framing Box */}
                   <div className="self-center flex flex-col items-center justify-center">
-                    <div className="w-16 h-16 rounded-full border border-dashed border-emerald-400/80 flex items-center justify-center animate-pulse">
-                      <div className="w-2.5 h-2.5 bg-emerald-400 rounded-full" />
-                    </div>
-                    <span className="text-[11px] font-bold text-white/90 bg-black/60 px-3 py-1 rounded-full mt-2 backdrop-blur-md border border-white/10 shadow-lg">
-                      Centra tu plato en el visor
-                    </span>
+                    {scanMode === 'barcode' ? (
+                      <div className="w-56 sm:w-72 h-28 sm:h-36 rounded-2xl border-2 border-dashed border-emerald-400 flex flex-col items-center justify-center bg-black/40 backdrop-blur-xs relative overflow-hidden shadow-[0_0_25px_rgba(16,185,129,0.35)]">
+                        <div className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_15px_#10b981] animate-bounce top-1/2" />
+                        <Barcode className="w-10 h-10 text-emerald-400 mb-1" />
+                        <span className="text-[10px] font-bold text-white/95 bg-black/70 px-2.5 py-0.5 rounded-full border border-white/15">
+                          Enfoca el código de barras o paquete
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="w-16 h-16 rounded-full border border-dashed border-emerald-400/80 flex items-center justify-center animate-pulse">
+                          <div className="w-2.5 h-2.5 bg-emerald-400 rounded-full" />
+                        </div>
+                        <span className="text-[11px] font-bold text-white/90 bg-black/60 px-3 py-1 rounded-full mt-2 backdrop-blur-md border border-white/10 shadow-lg">
+                          Centra tu plato en el visor
+                        </span>
+                      </>
+                    )}
                   </div>
 
                   <div className="flex justify-between">
@@ -622,6 +882,81 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Barcode / Package Manual Search & Quick Selection Chips */}
+          {scanMode === 'barcode' && (
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-xs space-y-3.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                  <Barcode className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  Búsqueda manual o rápida de paquete
+                </span>
+                <span className="text-[10px] font-semibold text-zinc-400">
+                  Open Food Facts & Alimentos
+                </span>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleManualSearch();
+                }}
+                className="flex flex-col sm:flex-row gap-2"
+              >
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={manualBarcodeInput}
+                    onChange={(e) => setManualBarcodeInput(e.target.value)}
+                    placeholder="Escribe código (ej: 7790040133036) o producto (ej: Chocolinas, Oreo, Cerealitas)..."
+                    className="w-full pl-9 pr-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-xl text-xs text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-3" />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isBarcodeSearching || !manualBarcodeInput.trim()}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  {isBarcodeSearching ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                  Buscar
+                </button>
+              </form>
+
+              {/* Quick Package Chips */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] font-medium text-zinc-400 mr-1 flex items-center gap-1">
+                  <Cookie className="w-3.5 h-3.5 text-amber-500" />
+                  Ejemplos rápidos:
+                </span>
+                {[
+                  { label: 'Chocolinas', query: 'Chocolinas' },
+                  { label: 'Galletitas Oreo', query: 'Oreo' },
+                  { label: 'Cerealitas', query: 'Cerealitas' },
+                  { label: 'Criollitas', query: 'Criollitas' },
+                  { label: 'Alfajor Havanna', query: 'Alfajor' },
+                  { label: 'Frutillas', query: 'Frutillas' },
+                ].map((chip) => (
+                  <button
+                    key={chip.label}
+                    type="button"
+                    onClick={() => {
+                      setManualBarcodeInput(chip.query);
+                      handleManualSearch(chip.query);
+                    }}
+                    className="text-[11px] px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 text-zinc-700 dark:text-zinc-300 rounded-lg border border-zinc-200 dark:border-zinc-700 transition-colors"
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -932,6 +1267,275 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
           </div>
         </div>
       )}
+
+      {/* STAGE 3b: Barcode & Package Portion Calculator Result */}
+      {stage === 'result' && packageResult && (() => {
+        const portionCalc = calculatePortionFromProduct(packageResult, cookieUnitCount);
+
+        return (
+          <div className="space-y-6 animate-in zoom-in-95 duration-200">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Left Column: Product Info & Package Visual Card */}
+              <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-xs space-y-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-extrabold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-1">
+                      <Barcode className="w-4 h-4" />
+                      {packageResult.source === 'openfoodfacts'
+                        ? 'Base Oficial Open Food Facts'
+                        : packageResult.source === 'database'
+                        ? 'Base de Alimentos NutriFit'
+                        : 'Reconocimiento de Paquete IA'}
+                    </div>
+                    <h2 className="text-xl font-black text-zinc-900 dark:text-zinc-100 leading-snug">
+                      {packageResult.productName}
+                    </h2>
+                    <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Marca: {packageResult.brand}
+                    </p>
+                  </div>
+
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/50">
+                    <Package className="w-6 h-6" />
+                  </div>
+                </div>
+
+                {packageResult.barcode && (
+                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs font-mono font-bold text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
+                    <Barcode className="w-4 h-4 text-emerald-500" />
+                    <span>EAN: {packageResult.barcode}</span>
+                  </div>
+                )}
+
+                {/* Photo if captured */}
+                {capturedImage && (
+                  <div className="relative aspect-video w-full rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-700/60 shadow-xs">
+                    <img
+                      src={capturedImage}
+                      alt={packageResult.productName}
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute top-2.5 left-2.5 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg text-white text-[10px] font-bold flex items-center gap-1 border border-white/10">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      Foto analizada
+                    </div>
+                  </div>
+                )}
+
+                {/* Reference Nutritional Card */}
+                <div className="bg-zinc-50 dark:bg-zinc-800/60 rounded-2xl p-4 border border-zinc-200/80 dark:border-zinc-700/60 space-y-3">
+                  <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                    Valores nutricionales de referencia:
+                  </span>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-zinc-700">
+                      <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                        1 {packageResult.unitName} ({formatGrams(packageResult.gramsPerUnit)}g aprox.)
+                      </span>
+                      <span className="font-black text-emerald-600 dark:text-emerald-400">
+                        {packageResult.caloriesPerUnit} kcal
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-[11px] pt-1 text-center">
+                      <div className="bg-white dark:bg-zinc-900 p-2 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                        <span className="text-zinc-400 block text-[10px]">Prot</span>
+                        <span className="font-bold text-zinc-800 dark:text-zinc-200">{formatGrams(packageResult.proteinPerUnit)}g</span>
+                      </div>
+                      <div className="bg-white dark:bg-zinc-900 p-2 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                        <span className="text-zinc-400 block text-[10px]">Carbs</span>
+                        <span className="font-bold text-zinc-800 dark:text-zinc-200">{formatGrams(packageResult.carbsPerUnit)}g</span>
+                      </div>
+                      <div className="bg-white dark:bg-zinc-900 p-2 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                        <span className="text-zinc-400 block text-[10px]">Grasas</span>
+                        <span className="font-bold text-zinc-800 dark:text-zinc-200">{formatGrams(packageResult.fatPerUnit)}g</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <span>Por cada 100g de producto:</span>
+                      <span className="font-bold text-zinc-700 dark:text-zinc-300">{packageResult.caloriesPer100g} kcal</span>
+                    </div>
+                  </div>
+                </div>
+
+                {packageResult.notes && (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">
+                    💡 {packageResult.notes}
+                  </p>
+                )}
+              </div>
+
+              {/* Right Column: Interactive Unit / Cookie Calculator & Diary Logger */}
+              <div className="lg:col-span-7 space-y-5">
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 sm:p-7 rounded-3xl shadow-xs space-y-6">
+                  {/* Dynamic Stepper Header */}
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                      Calculadora de Porciones Exactas
+                    </span>
+                    <h3 className="text-lg sm:text-xl font-black text-zinc-900 dark:text-zinc-100">
+                      ¿Cuántas {packageResult.unitName} te vas a comer de este paquete?
+                    </h3>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Indica las unidades exactas (ej: 4 galletitas) y calcularemos automáticamente los gramos y macros precisos sin redondeos deformados.
+                    </p>
+                  </div>
+
+                  {/* Interactive Stepper Control */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-700/60 flex flex-col items-center justify-center gap-4">
+                    <div className="flex items-center gap-6">
+                      <button
+                        type="button"
+                        id="btn-stepper-cookie-minus"
+                        onClick={() => setCookieUnitCount(Math.max(1, cookieUnitCount - 1))}
+                        className="w-12 h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-zinc-700 flex items-center justify-center font-black text-2xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                      >
+                        -
+                      </button>
+
+                      <div className="text-center min-w-[120px]">
+                        <div className="text-4xl sm:text-5xl font-black text-emerald-600 dark:text-emerald-400 tracking-tight">
+                          {cookieUnitCount}
+                        </div>
+                        <div className="text-xs font-bold text-zinc-700 dark:text-zinc-300 capitalize mt-0.5">
+                          {cookieUnitCount === 1 ? packageResult.unitName.replace(/s$/, '') : packageResult.unitName}
+                        </div>
+                        <div className="text-[11px] font-semibold text-zinc-400 mt-0.5">
+                          ≈ {formatGrams(portionCalc.totalGrams)} gramos netos
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        id="btn-stepper-cookie-plus"
+                        onClick={() => setCookieUnitCount(cookieUnitCount + 1)}
+                        className="w-12 h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-zinc-700 flex items-center justify-center font-black text-2xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    {/* Quick Selection Buttons */}
+                    <div className="w-full pt-1">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block text-center mb-2">
+                        Selección rápida de unidades:
+                      </span>
+                      <div className="flex flex-wrap justify-center gap-1.5">
+                        {[1, 2, 3, 4, 5, 6, 8, 10, 12, 15].map((cnt) => (
+                          <button
+                            key={cnt}
+                            type="button"
+                            onClick={() => setCookieUnitCount(cnt)}
+                            className={`px-3 py-1 text-xs rounded-xl font-bold transition-all ${
+                              cookieUnitCount === cnt
+                                ? 'bg-emerald-600 text-white shadow-xs'
+                                : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 cursor-pointer'
+                            }`}
+                          >
+                            {cnt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Calculated Macros Box for this portion */}
+                  <div className="bg-emerald-50/60 dark:bg-emerald-950/30 p-5 rounded-2xl border border-emerald-200/80 dark:border-emerald-800/60 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                        <Flame className="w-4 h-4 text-amber-500" />
+                        Total para {cookieUnitCount} {packageResult.unitName}:
+                      </span>
+                      <span className="text-2xl font-black text-emerald-700 dark:text-emerald-300">
+                        {portionCalc.calories} <span className="text-sm font-bold">kcal</span>
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3 pt-1">
+                      <div className="bg-white dark:bg-zinc-900/90 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/40 text-center">
+                        <span className="text-[10px] font-bold text-zinc-400 block uppercase">Proteínas</span>
+                        <span className="text-base font-black text-zinc-900 dark:text-zinc-100">
+                          {formatGrams(portionCalc.proteinGrams)}g
+                        </span>
+                      </div>
+                      <div className="bg-white dark:bg-zinc-900/90 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/40 text-center">
+                        <span className="text-[10px] font-bold text-zinc-400 block uppercase">Carbohidratos</span>
+                        <span className="text-base font-black text-zinc-900 dark:text-zinc-100">
+                          {formatGrams(portionCalc.carbsGrams)}g
+                        </span>
+                      </div>
+                      <div className="bg-white dark:bg-zinc-900/90 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/40 text-center">
+                        <span className="text-[10px] font-bold text-zinc-400 block uppercase">Grasas</span>
+                        <span className="text-base font-black text-zinc-900 dark:text-zinc-100">
+                          {formatGrams(portionCalc.fatGrams)}g
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Meal Destination Selector */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                      Momento de la comida en el Diario:
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {(['breakfast', 'lunch', 'dinner', 'snacks'] as MealType[]).map((m) => {
+                        const labels = {
+                          breakfast: 'Desayuno',
+                          lunch: 'Almuerzo',
+                          dinner: 'Cena',
+                          snacks: 'Snacks / Merienda',
+                        };
+                        const isSelected = selectedMeal === m;
+                        return (
+                          <button
+                            key={m}
+                            type="button"
+                            id={`package-meal-choice-${m}`}
+                            onClick={() => setSelectedMeal(m)}
+                            className={`py-2 px-3 text-xs rounded-xl font-bold border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs ring-1 ring-emerald-600'
+                                : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50'
+                            }`}
+                          >
+                            {labels[m]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* CTAs */}
+                  <div className="pt-2 flex flex-col sm:flex-row gap-3">
+                    <button
+                      type="button"
+                      id="btn-confirm-add-package-to-diary"
+                      onClick={handleConfirmPackagePortion}
+                      className="flex-1 py-3.5 px-5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-sm font-black rounded-2xl shadow-sm hover:shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Check className="w-5 h-5" />
+                      Añadir {cookieUnitCount} {packageResult.unitName} al Diario ({portionCalc.calories} kcal)
+                    </button>
+
+                    <button
+                      type="button"
+                      id="btn-scanner-retake-package"
+                      onClick={handleReset}
+                      className="py-3.5 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold rounded-2xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      Escanear Otro
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

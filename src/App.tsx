@@ -285,7 +285,7 @@ export default function App() {
 
             const hasRealBiometrics = remoteProfile.age && remoteProfile.heightCm && remoteProfile.weightKg;
             // Only overwrite local if remote profile is strictly newer and has real biometric data
-            if (remoteTime > localTime && hasRealBiometrics) {
+            if (remoteTime > localTime + 2000 && hasRealBiometrics) {
               setProfile(remoteProfile);
               saveStoredProfileForUser(email, remoteProfile);
             } else if (localTime >= remoteTime && currentLocal.weightKg) {
@@ -336,13 +336,23 @@ export default function App() {
           setProfile((prev) => {
             const currentLocal = loadStoredProfileForUser(email, session.name);
             const localTime = currentLocal.updatedAt ? new Date(currentLocal.updatedAt).getTime() : 0;
-            const cloudTime = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
+            const cloudProfileTime = cloudData.profile?.updatedAt 
+              ? new Date(cloudData.profile.updatedAt).getTime() 
+              : 0;
 
             const hasRealCloudBiometrics = cloudData.profile?.age && cloudData.profile?.heightCm && cloudData.profile?.weightKg;
-            if (cloudTime > localTime && hasRealCloudBiometrics) {
+            if (cloudProfileTime > localTime + 2000 && hasRealCloudBiometrics) {
               const mergedProfile: UserProfile = { ...currentLocal, ...cloudData.profile };
               saveStoredProfileForUser(email, mergedProfile);
               return mergedProfile;
+            } else if (localTime >= cloudProfileTime && currentLocal.weightKg) {
+              // Local profile is newer, ensure cloud backend is kept up to date
+              cloudSyncService.pushUserData({
+                email,
+                name: session.name,
+                profile: currentLocal,
+                userId: session.userId,
+              }).catch(() => {});
             }
             return prev;
           });
@@ -434,10 +444,16 @@ export default function App() {
     if (!session) return;
     const profileWithTime: UserProfile = {
       ...updated,
-      updatedAt: updated.updatedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     setProfile(profileWithTime);
     saveStoredProfileForUser(session.email, profileWithTime);
+
+    // Provide immediate in-app Toast notification confirmation as requested by user
+    notificationService.notifySuccess(
+      '¡Perfil Guardado con Éxito!',
+      `Tus datos (${profileWithTime.age} años, ${profileWithTime.heightCm} cm, ${profileWithTime.weightKg} kg) y metas metabólicas (${profileWithTime.targetCalories} kcal) se guardaron y sincronizaron correctamente.`
+    );
 
     // Sync to Cloud Backend
     cloudSyncService.pushUserData({
@@ -610,6 +626,48 @@ export default function App() {
         console.warn('Supabase update water error:', err)
       );
     }
+  };
+
+  // Toggle close day and trigger database synchronization
+  const handleToggleCloseDay = (date: string) => {
+    if (!session) return;
+    setDailyLogs((prev) => {
+      const existingLog = prev[date] || { date, items: [] };
+      const willClose = !existingLog.isClosed;
+      const updatedDay: DailyLog = {
+        ...existingLog,
+        isClosed: willClose,
+        closedAt: willClose ? new Date().toISOString() : undefined,
+      };
+      const updatedLogs: Record<string, DailyLog> = {
+        ...prev,
+        [date]: updatedDay,
+      };
+      saveDailyLogsForUser(session.email, updatedLogs);
+
+      // Persistir y sincronizar inmediatamente en la base de datos
+      cloudSyncService.pushUserData({
+        email: session.email,
+        name: session.name,
+        profile,
+        dailyLogs: updatedLogs,
+        userId: session.userId,
+      }).catch((err) => console.warn('Cloud sync close day notice:', err));
+
+      if (willClose) {
+        notificationService.notifySuccess(
+          '¡Día Cerrado con Éxito!',
+          'Registro guardado y sincronizado en la base de datos.'
+        );
+      } else {
+        notificationService.notifyInfo(
+          'Día Reabierto',
+          'El día está ahora disponible para edición y nuevos alimentos.'
+        );
+      }
+
+      return updatedLogs;
+    });
   };
 
   // Save weight entry
@@ -812,6 +870,7 @@ export default function App() {
             onAddFoodItem={handleAddFoodItem}
             onRemoveFoodItem={handleRemoveFoodItem}
             onUpdateWater={handleUpdateWater}
+            onToggleCloseDay={handleToggleCloseDay}
             onOpenProfile={() => setActiveTab('profile')}
             onNavigateToScanner={() => setActiveTab('scanner')}
             onNavigateToActivity={() => setActiveTab('activity')}

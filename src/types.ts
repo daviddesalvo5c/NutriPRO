@@ -66,6 +66,9 @@ export interface DailyLog {
   items: FoodItem[];
   waterMl?: number; // Daily hydration in ml
   waterGoalMl?: number;
+  isClosed?: boolean;
+  closedAt?: string;
+  notes?: string;
 }
 
 export interface WeightEntry {

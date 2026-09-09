@@ -112,7 +112,7 @@ class CloudSyncService {
           email: cleanEmail,
           name: supaProfile?.name || cleanEmail.split('@')[0],
           tier: 'free',
-          updatedAt: new Date().toISOString(),
+          updatedAt: supaProfile?.updatedAt || '1970-01-01T00:00:00.000Z',
         };
       }
 

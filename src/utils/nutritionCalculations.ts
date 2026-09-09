@@ -255,3 +255,21 @@ export function getProfileCalculations(profile: UserProfile): CalculationResult 
     calorieAdjustment,
   };
 }
+
+/**
+ * Redondea y formatea gramos a un máximo de 2 o 3 decimales,
+ * eliminando ceros innecesarios (ej: 12.30 -> "12.3", 10.00 -> "10", 0.33333333 -> "0.33")
+ * para evitar desfasar el CSS o romper el layout con números como 15.000000000002.
+ */
+export function formatGrams(value: number | undefined | null, maxDecimals: number = 2): string {
+  if (value === undefined || value === null || isNaN(value)) return '0';
+  const num = Number(value);
+  if (Number.isInteger(num)) return num.toString();
+  return Number(num.toFixed(maxDecimals)).toString();
+}
+
+export function roundGrams(value: number | undefined | null, maxDecimals: number = 2): number {
+  if (value === undefined || value === null || isNaN(value)) return 0;
+  return Number(Number(value).toFixed(maxDecimals));
+}
+

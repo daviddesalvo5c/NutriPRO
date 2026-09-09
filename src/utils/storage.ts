@@ -65,7 +65,7 @@ export function createDefaultProfile(name: string = 'Usuario'): UserProfile {
     targetProteinGrams: macros.proteinGrams,
     targetCarbsGrams: macros.carbsGrams,
     targetFatGrams: macros.fatGrams,
-    updatedAt: new Date().toISOString(),
+    updatedAt: '1970-01-01T00:00:00.000Z',
   };
 }
 
@@ -276,7 +276,7 @@ export function saveStoredProfileForUser(email: string, profile: UserProfile): v
   try {
     const updated = {
       ...profile,
-      updatedAt: new Date().toISOString(),
+      updatedAt: profile.updatedAt || new Date().toISOString(),
     };
     localStorage.setItem(storageKey, JSON.stringify(updated));
   } catch (err) {

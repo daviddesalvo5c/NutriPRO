@@ -1223,7 +1223,7 @@ export async function supabaseFetchUserProfile(
         targetProteinGrams: Number(data.target_protein) || 140,
         targetCarbsGrams: Number(data.target_carbs) || 200,
         targetFatGrams: Number(data.target_fat) || 55,
-        updatedAt: data.updated_at || new Date().toISOString(),
+        updatedAt: data.updated_at || '1970-01-01T00:00:00.000Z',
       };
 
       return profile;
@@ -1256,7 +1256,7 @@ export async function supabaseFetchUserProfile(
         targetProteinGrams: Number(data.target_protein_grams) || 140,
         targetCarbsGrams: Number(data.target_carbs_grams) || 200,
         targetFatGrams: Number(data.target_fat_grams) || 55,
-        updatedAt: data.updated_at || new Date().toISOString(),
+        updatedAt: data.updated_at || '1970-01-01T00:00:00.000Z',
       };
 
       return profile;

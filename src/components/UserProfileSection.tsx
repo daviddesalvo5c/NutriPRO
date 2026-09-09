@@ -287,7 +287,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
   return (
     <div className="space-y-8 pb-12" id="user-profile-screen">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white p-6 sm:p-8 rounded-2xl shadow-sm">
+      <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white p-6 sm:p-8 rounded-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="max-w-3xl">
           <div className="flex items-center gap-2 text-emerald-100 text-xs font-semibold uppercase tracking-wider mb-2">
             <User className="w-4 h-4" />
@@ -300,6 +300,30 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
             Configura tus medidas biológicas para estimar con exactitud tu Tasa Metabólica Basal (BMR) y Gasto Total (TDEE).
             Al definir tu objetivo, la aplicación calibrará automáticamente todas las barras de progreso del diario.
           </p>
+        </div>
+        <div className="shrink-0 flex items-center">
+          <button
+            type="button"
+            id="top-save-profile-btn"
+            onClick={handleSave}
+            className={`w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${
+              savedSuccess
+                ? 'bg-emerald-900 text-white ring-2 ring-emerald-300'
+                : 'bg-white text-emerald-900 hover:bg-emerald-50 active:scale-95'
+            }`}
+          >
+            {savedSuccess ? (
+              <>
+                <Check className="w-4 h-4 text-emerald-300 stroke-[3]" />
+                <span>¡Guardado con Éxito!</span>
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4 text-emerald-600" />
+                <span>Guardar Perfil & Metas</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 

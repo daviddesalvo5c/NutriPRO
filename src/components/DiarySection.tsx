@@ -20,7 +20,7 @@ import {
   Lock
 } from 'lucide-react';
 import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
-import { getProfileCalculations } from '../utils/nutritionCalculations';
+import { getProfileCalculations, formatGrams, roundGrams } from '../utils/nutritionCalculations';
 import { WaterTrackerCard } from './WaterTrackerCard';
 import { hasUserProAccess, FOUNDER_EMAIL } from '../utils/storage';
 import { AddArgentineFoodModal } from './AddArgentineFoodModal';
@@ -33,6 +33,7 @@ interface DiarySectionProps {
   onAddFoodItem: (date: string, item: Omit<FoodItem, 'id'>) => void;
   onRemoveFoodItem: (date: string, itemId: string) => void;
   onUpdateWater?: (date: string, amountMl: number) => void;
+  onToggleCloseDay?: (date: string) => void;
   onOpenProfile: () => void;
   onNavigateToScanner: () => void;
   onNavigateToActivity?: () => void;
@@ -51,6 +52,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   onAddFoodItem,
   onRemoveFoodItem,
   onUpdateWater,
+  onToggleCloseDay,
   onOpenProfile,
   onNavigateToScanner,
   onNavigateToActivity,
@@ -89,17 +91,17 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   const currentLog = dailyLogs[selectedDate] || { date: selectedDate, items: [] };
   const items = currentLog.items || [];
 
-  // Sum consumed
-  const totalCaloriesConsumed = items.reduce((acc, i) => acc + (i.calories || 0), 0);
-  const totalProteinConsumed = items.reduce((acc, i) => acc + (i.proteinGrams || 0), 0);
-  const totalCarbsConsumed = items.reduce((acc, i) => acc + (i.carbsGrams || 0), 0);
-  const totalFatConsumed = items.reduce((acc, i) => acc + (i.fatGrams || 0), 0);
+  // Sum consumed (redondeado para evitar decimales largos o desfases en el CSS)
+  const totalCaloriesConsumed = Math.round(items.reduce((acc, i) => acc + (i.calories || 0), 0));
+  const totalProteinConsumed = roundGrams(items.reduce((acc, i) => acc + (i.proteinGrams || 0), 0));
+  const totalCarbsConsumed = roundGrams(items.reduce((acc, i) => acc + (i.carbsGrams || 0), 0));
+  const totalFatConsumed = roundGrams(items.reduce((acc, i) => acc + (i.fatGrams || 0), 0));
 
   // Targets from Profile
   const targetCalories = profileCalcs.targetCalories;
-  const targetProtein = profileCalcs.proteinGrams;
-  const targetCarbs = profileCalcs.carbsGrams;
-  const targetFat = profileCalcs.fatGrams;
+  const targetProtein = roundGrams(profileCalcs.proteinGrams);
+  const targetCarbs = roundGrams(profileCalcs.carbsGrams);
+  const targetFat = roundGrams(profileCalcs.fatGrams);
 
   // Real-time activity discount logic
   const activeBurn = (discountActivityCalories && totalActivityBurned > 0) ? totalActivityBurned : 0;
@@ -251,6 +253,24 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             <span>Escanear IA</span>
           </button>
 
+          {/* Cerrar el Día button */}
+          {onToggleCloseDay && (
+            <button
+              type="button"
+              id="diary-btn-toggle-close-day"
+              onClick={() => onToggleCloseDay(selectedDate)}
+              className={`h-9 px-3.5 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all hover:scale-[1.02] whitespace-nowrap ${
+                currentLog.isClosed
+                  ? 'bg-emerald-600 text-white shadow-emerald-600/30 ring-2 ring-emerald-500/50'
+                  : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-100'
+              }`}
+              title={currentLog.isClosed ? 'Día cerrado y guardado en la base de datos. Clic para reabrir.' : 'Cerrar el día y guardar en la base de datos'}
+            >
+              <CheckCircle className={`w-3.5 h-3.5 ${currentLog.isClosed ? 'text-white' : 'text-emerald-400'}`} />
+              <span>{currentLog.isClosed ? 'Día Cerrado ✓' : 'Cerrar el Día'}</span>
+            </button>
+          )}
+
           {/* Pill/badge David Desalvo (Fundador) Déficit */}
           <button
             type="button"
@@ -274,6 +294,43 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Closed Day Notification Banner */}
+      {currentLog.isClosed && (
+        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <CheckCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-xs sm:text-sm font-black text-emerald-900 dark:text-emerald-100">
+                  Día Cerrado y Guardado
+                </h4>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200/80 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200">
+                  Sincronizado
+                </span>
+              </div>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300/80 mt-0.5">
+                {currentLog.closedAt
+                  ? `Cerrado a las ${new Date(currentLog.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                  : 'Registro finalizado'} · El balance calórico y macronutrientes han sido guardados permanentemente.
+              </p>
+            </div>
+          </div>
+
+          {onToggleCloseDay && (
+            <button
+              type="button"
+              id="diary-btn-reopen-day"
+              onClick={() => onToggleCloseDay(selectedDate)}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-zinc-700 transition-colors shrink-0"
+            >
+              Reabrir para editar
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Calories & Macros Tracker Banner */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs">
@@ -360,8 +417,8 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                   <span className="text-zinc-900 dark:text-zinc-100">Proteínas</span>
                 </div>
                 <div className="text-zinc-700 dark:text-zinc-300">
-                  <span className="text-indigo-600 dark:text-indigo-400 font-bold">{totalProteinConsumed}g</span>
-                  <span className="text-zinc-400 font-normal"> / {targetProtein}g</span>
+                  <span className="text-indigo-600 dark:text-indigo-400 font-bold">{formatGrams(totalProteinConsumed)}g</span>
+                  <span className="text-zinc-400 font-normal"> / {formatGrams(targetProtein)}g</span>
                   <span className="ml-2 text-[10px] text-zinc-500">({proteinPercent}%)</span>
                 </div>
               </div>
@@ -381,8 +438,8 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                   <span className="text-zinc-900 dark:text-zinc-100">Carbohidratos</span>
                 </div>
                 <div className="text-zinc-700 dark:text-zinc-300">
-                  <span className="text-amber-600 dark:text-amber-400 font-bold">{totalCarbsConsumed}g</span>
-                  <span className="text-zinc-400 font-normal"> / {targetCarbs}g</span>
+                  <span className="text-amber-600 dark:text-amber-400 font-bold">{formatGrams(totalCarbsConsumed)}g</span>
+                  <span className="text-zinc-400 font-normal"> / {formatGrams(targetCarbs)}g</span>
                   <span className="ml-2 text-[10px] text-zinc-500">({carbsPercent}%)</span>
                 </div>
               </div>
@@ -402,8 +459,8 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                   <span className="text-zinc-900 dark:text-zinc-100">Grasas</span>
                 </div>
                 <div className="text-zinc-700 dark:text-zinc-300">
-                  <span className="text-rose-600 dark:text-rose-400 font-bold">{totalFatConsumed}g</span>
-                  <span className="text-zinc-400 font-normal"> / {targetFat}g</span>
+                  <span className="text-rose-600 dark:text-rose-400 font-bold">{formatGrams(totalFatConsumed)}g</span>
+                  <span className="text-zinc-400 font-normal"> / {formatGrams(targetFat)}g</span>
                   <span className="ml-2 text-[10px] text-zinc-500">({fatPercent}%)</span>
                 </div>
               </div>
@@ -469,10 +526,10 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
         <div className="space-y-4">
         {mealsList.map((meal) => {
           const mealItems = items.filter((i) => i.mealType === meal.type);
-          const mealCals = mealItems.reduce((acc, i) => acc + (i.calories || 0), 0);
-          const mealProtein = mealItems.reduce((acc, i) => acc + (i.proteinGrams || 0), 0);
-          const mealCarbs = mealItems.reduce((acc, i) => acc + (i.carbsGrams || 0), 0);
-          const mealFat = mealItems.reduce((acc, i) => acc + (i.fatGrams || 0), 0);
+          const mealCals = Math.round(mealItems.reduce((acc, i) => acc + (i.calories || 0), 0));
+          const mealProtein = roundGrams(mealItems.reduce((acc, i) => acc + (i.proteinGrams || 0), 0));
+          const mealCarbs = roundGrams(mealItems.reduce((acc, i) => acc + (i.carbsGrams || 0), 0));
+          const mealFat = roundGrams(mealItems.reduce((acc, i) => acc + (i.fatGrams || 0), 0));
           const MealIcon = meal.icon;
 
           return (
@@ -494,9 +551,9 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                     <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                       <span className="font-semibold text-zinc-800 dark:text-zinc-200">{mealCals} kcal</span>
                       <span>·</span>
-                      <span>P: {mealProtein}g</span>
-                      <span>C: {mealCarbs}g</span>
-                      <span>G: {mealFat}g</span>
+                      <span>P: {formatGrams(mealProtein)}g</span>
+                      <span>C: {formatGrams(mealCarbs)}g</span>
+                      <span>G: {formatGrams(mealFat)}g</span>
                     </div>
                   </div>
                 </div>
@@ -548,22 +605,22 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                       <div className="flex items-center gap-3 shrink-0">
                         <div className="flex items-center gap-1.5 text-[10px] font-bold hidden sm:flex">
                           <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50 dark:border-indigo-800/50">
-                            {item.proteinGrams}g P
+                            {formatGrams(item.proteinGrams)}g P
                           </span>
                           <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/50">
-                            {item.carbsGrams}g C
+                            {formatGrams(item.carbsGrams)}g C
                           </span>
                           <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200/50 dark:border-rose-800/50">
-                            {item.fatGrams}g G
+                            {formatGrams(item.fatGrams)}g G
                           </span>
                         </div>
 
                         <div className="text-right">
                           <span className="text-xs font-black text-zinc-800 dark:text-zinc-200 block">
-                            {item.calories} kcal
+                            {Math.round(item.calories)} kcal
                           </span>
                           <span className="text-[10px] text-zinc-400 sm:hidden">
-                            {item.proteinGrams}P · {item.carbsGrams}C · {item.fatGrams}G
+                            {formatGrams(item.proteinGrams)}P · {formatGrams(item.carbsGrams)}C · {formatGrams(item.fatGrams)}G
                           </span>
                         </div>
 
@@ -583,6 +640,47 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             </div>
           );
         })}
+
+        {/* Card de Cierre de Jornada / Sincronización */}
+        {!isHistoryLocked && onToggleCloseDay && (
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4 mt-6">
+            <div className="flex items-center gap-3 text-center sm:text-left">
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
+                currentLog.isClosed
+                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300'
+              }`}>
+                <CheckCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                  {currentLog.isClosed
+                    ? 'Jornada Cerrada y Guardada'
+                    : '¿Terminaste de registrar todas tus comidas del día?'}
+                </h4>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {currentLog.isClosed
+                    ? 'Este día está asegurado en la base de datos. Puedes reabrirlo cuando desees añadir más alimentos.'
+                    : `Cierra el día para archivar tu consumo (${totalCaloriesConsumed} kcal) y sincronizarlo de forma permanente en la base de datos.`}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              id="diary-btn-footer-close-day"
+              onClick={() => onToggleCloseDay(selectedDate)}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 shadow-xs transition-all hover:scale-105 shrink-0 ${
+                currentLog.isClosed
+                  ? 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+              }`}
+            >
+              <CheckCircle className="w-4 h-4" />
+              <span>{currentLog.isClosed ? 'Reabrir Día' : 'Cerrar el Día y Guardar'}</span>
+            </button>
+          </div>
+        )}
       </div>
       )}
 

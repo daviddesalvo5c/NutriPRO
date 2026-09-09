@@ -61,12 +61,12 @@ export const ToastContainer: React.FC = () => {
     <div 
       id="toast-notification-region"
       aria-live="polite"
-      className="fixed bottom-4 right-4 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-3 sm:px-0"
+      className="fixed top-4 sm:top-auto sm:bottom-6 right-3 sm:right-6 z-[9999] flex flex-col gap-2.5 max-w-sm w-[calc(100%-1.5rem)] sm:w-full pointer-events-none"
     >
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`pointer-events-auto flex items-start gap-3 p-4 rounded-2xl border backdrop-blur-md shadow-lg transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in ${getCardBorder(toast.type)}`}
+          className={`pointer-events-auto flex items-start gap-3 p-4 rounded-2xl border backdrop-blur-md shadow-2xl transition-all duration-300 animate-in slide-in-from-top-4 sm:slide-in-from-bottom-5 fade-in ${getCardBorder(toast.type)}`}
         >
           <div className="mt-0.5">
             {getIcon(toast.type)}

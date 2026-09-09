@@ -200,6 +200,138 @@ Analiza la imagen proporcionada con un objetivo de acertividad mínimo del 95%.
   }
 });
 
+// Endpoint para análisis bromatológico de paquetes, productos y etiquetas con código de barras
+app.post('/api/analyze-package', async (req, res) => {
+  try {
+    const { image, barcode, productHint, mimeType = 'image/jpeg' } = req.body;
+
+    if (!image && !barcode && !productHint) {
+      return res.status(400).json({ error: 'Se requiere una imagen del paquete, código de barras o nombre del producto.' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return res.json({
+        productName: productHint || (barcode ? `Producto #${barcode}` : 'Paquete de Galletitas / Snack'),
+        brand: 'Genérica',
+        barcode: barcode || '',
+        unitName: 'galletitas',
+        unitsPerServing: 3,
+        gramsPerUnit: 8.5,
+        caloriesPerUnit: 39,
+        proteinPerUnit: 0.7,
+        carbsPerUnit: 6.2,
+        fatPerUnit: 1.3,
+        caloriesPer100g: 460,
+        proteinPer100g: 8.2,
+        carbsPer100g: 73.0,
+        fatPer100g: 15.3,
+        servingLabel: 'Porción sugerida: 3 galletitas (~25.5g)',
+        confidence: 90,
+        notes: 'Cálculo estimado basado en tablas nutricionales estándar para galletitas y snacks envasados.',
+      });
+    }
+
+    const ai = getGeminiClient();
+
+    let contentsParts: any[] = [];
+
+    if (image) {
+      let cleanBase64 = image;
+      let detectedMime = mimeType;
+      if (image.startsWith('data:')) {
+        const matches = image.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+        if (matches) {
+          detectedMime = matches[1];
+          cleanBase64 = matches[2];
+        } else {
+          cleanBase64 = image.replace(/^data:[^;]+;base64,/, '');
+        }
+      }
+      contentsParts.push({
+        inlineData: {
+          mimeType: detectedMime,
+          data: cleanBase64,
+        },
+      });
+    }
+
+    const promptText = `Eres un experto bromatólogo y analista de rotulado nutricional de alimentos envasados (galletitas, snacks, lácteos, cereales, etc.).
+Analiza el paquete, etiqueta nutricional o producto proporcionado.
+${barcode ? `Código de barras escaneado: ${barcode}.` : ''}
+${productHint ? `Pista / Nombre del producto: ${productHint}.` : ''}
+
+Objetivo:
+1. Identifica el nombre comercial del producto (ej: "Galletitas Chocolinas", "Galletitas Oreo Original", "Cerealitas Avena y Trigo", "Yogur La Serenísima") y la marca.
+2. Identifica el tipo de unidad individual (ej: "galletitas", "unidades", "rebanadas", "barritas", "alfajor").
+3. Calcula o extrae el peso promedio de 1 unidad individual en gramos (gramsPerUnit). Si el paquete dice "Porción 3 galletitas (30g)", 1 galletita pesa 10g.
+4. Calcula las calorías y macronutrientes (proteína, carbohidratos, grasas) por CADA UNIDAD individual (ej: por 1 galletita).
+5. Calcula los valores nutricionales por 100 gramos.
+6. Permite calcular dinámicamente si el usuario come N unidades (ej. si se come 4 galletitas).
+7. Agrega una nota explicativa clara en español.`;
+
+    contentsParts.push({ text: promptText });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: {
+        parts: contentsParts,
+      },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            productName: { type: Type.STRING, description: 'Nombre específico del producto' },
+            brand: { type: Type.STRING, description: 'Marca comercial' },
+            barcode: { type: Type.STRING, description: 'Código de barras numérico si es visible' },
+            unitName: { type: Type.STRING, description: 'Nombre de la unidad individual (ej: galletita, unidad, rebanada)' },
+            unitsPerServing: { type: Type.NUMBER, description: 'Cantidad de unidades por porción de rotulado' },
+            gramsPerUnit: { type: Type.NUMBER, description: 'Peso neto en gramos de 1 unidad individual' },
+            caloriesPerUnit: { type: Type.NUMBER, description: 'Calorías en kcal de 1 unidad individual' },
+            proteinPerUnit: { type: Type.NUMBER, description: 'Gramos de proteína en 1 unidad' },
+            carbsPerUnit: { type: Type.NUMBER, description: 'Gramos de carbohidratos en 1 unidad' },
+            fatPerUnit: { type: Type.NUMBER, description: 'Gramos de grasas en 1 unidad' },
+            caloriesPer100g: { type: Type.NUMBER, description: 'Calorías totales por 100g' },
+            proteinPer100g: { type: Type.NUMBER, description: 'Proteína por 100g' },
+            carbsPer100g: { type: Type.NUMBER, description: 'Carbohidratos por 100g' },
+            fatPer100g: { type: Type.NUMBER, description: 'Grasas por 100g' },
+            servingLabel: { type: Type.STRING, description: 'Texto de la porción oficial' },
+            confidence: { type: Type.NUMBER, description: 'Nivel de confianza 80-99' },
+            notes: { type: Type.STRING, description: 'Detalle o recomendación para porciones' },
+          },
+          required: [
+            'productName',
+            'brand',
+            'unitName',
+            'gramsPerUnit',
+            'caloriesPerUnit',
+            'proteinPerUnit',
+            'carbsPerUnit',
+            'fatPerUnit',
+            'caloriesPer100g',
+            'proteinPer100g',
+            'carbsPer100g',
+            'fatPer100g',
+            'confidence',
+          ],
+        },
+      },
+    });
+
+    const output = response.text;
+    if (!output) throw new Error('No se recibió respuesta de análisis de paquete.');
+    return res.json(JSON.parse(output));
+  } catch (err: any) {
+    console.error('Error in /api/analyze-package:', err);
+    return res.status(500).json({
+      error: 'No se pudo leer la información del paquete. Intenta enfocar mejor la tabla nutricional o el código de barras.',
+      details: err.message,
+    });
+  }
+});
+
 // ============================================================================
 // CLOUD DATA PERSISTENCE & REAL-TIME SYNC (Supabase Database + Device Sync)
 // ============================================================================
@@ -565,7 +697,7 @@ app.get('/api/sync/pull', async (req, res) => {
       name: cleanEmail.split('@')[0],
       tier: 'free',
       dailyLogs: {},
-      updatedAt: new Date().toISOString(),
+      updatedAt: '1970-01-01T00:00:00.000Z',
     };
 
     // Pull directly from Supabase database to ensure cross-device consistency
