@@ -1,15 +1,10 @@
+import { BUILT_IN_FOODS } from '../../src/data/foodLibrary.ts';
+
 /**
- * Búsqueda de alimentos en USDA FoodData Central.
+ * Búsqueda de alimentos en USDA FoodData Central con respaldo en biblioteca local.
  *
  * Fuente: U.S. Department of Agriculture, Agricultural Research Service,
  * FoodData Central — https://fdc.nal.usda.gov/
- *
- * Se consulta en vivo en lugar de mantener una copia local por dos razones:
- * cubre cientos de miles de alimentos en vez de unas decenas, y cada resultado
- * conserva su `fdcId`, de modo que cualquier valor mostrado en la app es
- * rastreable hasta su ficha oficial.
- *
- * La clave va en el servidor (USDA_API_KEY), nunca en el bundle del cliente.
  */
 
 /** Identificadores de nutrientes en FoodData Central. Valores por 100 g. */
@@ -74,9 +69,37 @@ function nutrientValue(nutrients: any[], id: number): number | null {
 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
+function searchLocalFoods(term: string, limit = 25): FoodSearchResult[] {
+  const lower = term.toLowerCase();
+  const matches = BUILT_IN_FOODS.filter(
+    (f) =>
+      f.name.toLowerCase().includes(lower) ||
+      (f.sourceName && f.sourceName.toLowerCase().includes(lower)) ||
+      f.category.toLowerCase().includes(lower)
+  );
+
+  return matches.slice(0, limit).map((f, idx) => ({
+    fdcId: f.fdcId || 900000 + idx,
+    name: f.name,
+    dataType: f.provenance === 'usda' ? 'SR Legacy' : 'Referencia Nutricional',
+    category: f.category,
+    per100g: {
+      calories: f.per100g.calories,
+      protein: f.per100g.protein,
+      carbs: f.per100g.carbs,
+      fat: f.per100g.fat,
+      fiber: null,
+      sodium: null,
+    },
+    sourceUrl: f.fdcId
+      ? `https://fdc.nal.usda.gov/food-details/${f.fdcId}/nutrients`
+      : 'https://fdc.nal.usda.gov/',
+  }));
+}
+
 /**
  * Busca alimentos por nombre.
- * @throws {FoodSearchError} si no hay clave o la API falla.
+ * Consulta USDA FoodData Central y respalda con la biblioteca local si no hay clave o la API falla.
  */
 export async function searchFoods(query: string, limit = 25): Promise<FoodSearchResult[]> {
   const term = (query || '').trim();
@@ -84,14 +107,7 @@ export async function searchFoods(query: string, limit = 25): Promise<FoodSearch
     throw new FoodSearchError('Escribe al menos dos letras.', 400, 'query_too_short');
   }
 
-  const apiKey = process.env.USDA_API_KEY;
-  if (!apiKey) {
-    throw new FoodSearchError(
-      'La búsqueda de alimentos no está configurada en el servidor.',
-      503,
-      'not_configured'
-    );
-  }
+  const apiKey = process.env.USDA_API_KEY || 'DEMO_KEY';
 
   const url =
     `https://api.nal.usda.gov/fdc/v1/foods/search` +
@@ -100,58 +116,51 @@ export async function searchFoods(query: string, limit = 25): Promise<FoodSearch
     `&pageSize=${Math.min(Math.max(limit, 1), 50)}` +
     `&api_key=${encodeURIComponent(apiKey)}`;
 
-  let response: Response;
   try {
-    response = await fetch(url);
-  } catch (error: any) {
-    console.error('[searchFoods] red:', error?.message || error);
-    throw new FoodSearchError('No se pudo contactar con la base de datos de alimentos.');
-  }
+    const response = await fetch(url);
 
-  if (response.status === 429) {
-    throw new FoodSearchError(
-      'Se alcanzó el límite de consultas a la base de datos. Prueba en unos minutos.',
-      429,
-      'rate_limited'
-    );
-  }
+    if (response.ok) {
+      const json: any = await response.json();
+      const usdaResults = (json.foods || [])
+        .map((food: any): FoodSearchResult | null => {
+          const nutrients = food.foodNutrients || [];
 
-  if (!response.ok) {
-    console.error('[searchFoods] HTTP', response.status);
-    throw new FoodSearchError('La base de datos de alimentos devolvió un error.');
-  }
+          const calories = nutrientValue(nutrients, NUTRIENT.energyKcal);
+          const protein = nutrientValue(nutrients, NUTRIENT.protein);
+          const carbs = nutrientValue(nutrients, NUTRIENT.carbs);
+          const fat = nutrientValue(nutrients, NUTRIENT.fat);
 
-  const json: any = await response.json();
+          // Sin los cuatro macros el alimento no sirve para el diario.
+          if (calories === null || protein === null || carbs === null || fat === null) {
+            return null;
+          }
 
-  return (json.foods || [])
-    .map((food: any): FoodSearchResult | null => {
-      const nutrients = food.foodNutrients || [];
+          return {
+            fdcId: food.fdcId,
+            name: food.description,
+            dataType: food.dataType,
+            category: food.foodCategory || '',
+            per100g: {
+              calories: Math.round(calories),
+              protein: round1(protein),
+              carbs: round1(carbs),
+              fat: round1(fat),
+              fiber: nutrientValue(nutrients, NUTRIENT.fiber),
+              sodium: nutrientValue(nutrients, NUTRIENT.sodium),
+            },
+            sourceUrl: `https://fdc.nal.usda.gov/food-details/${food.fdcId}/nutrients`,
+          };
+        })
+        .filter(Boolean) as FoodSearchResult[];
 
-      const calories = nutrientValue(nutrients, NUTRIENT.energyKcal);
-      const protein = nutrientValue(nutrients, NUTRIENT.protein);
-      const carbs = nutrientValue(nutrients, NUTRIENT.carbs);
-      const fat = nutrientValue(nutrients, NUTRIENT.fat);
-
-      // Sin los cuatro macros el alimento no sirve para el diario.
-      if (calories === null || protein === null || carbs === null || fat === null) {
-        return null;
+      if (usdaResults.length > 0) {
+        return usdaResults;
       }
+    }
+  } catch (error: any) {
+    console.warn('[searchFoods] Aviso de consulta USDA, usando biblioteca local:', error?.message || error);
+  }
 
-      return {
-        fdcId: food.fdcId,
-        name: food.description,
-        dataType: food.dataType,
-        category: food.foodCategory || '',
-        per100g: {
-          calories: Math.round(calories),
-          protein: round1(protein),
-          carbs: round1(carbs),
-          fat: round1(fat),
-          fiber: nutrientValue(nutrients, NUTRIENT.fiber),
-          sodium: nutrientValue(nutrients, NUTRIENT.sodium),
-        },
-        sourceUrl: `https://fdc.nal.usda.gov/food-details/${food.fdcId}/nutrients`,
-      };
-    })
-    .filter(Boolean) as FoodSearchResult[];
+  // Respaldo de biblioteca local
+  return searchLocalFoods(term, limit);
 }
