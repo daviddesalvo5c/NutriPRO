@@ -21,10 +21,7 @@ import {
   Clock, 
   Smartphone,
   Check,
-  AlertCircle,
-  ExternalLink,
-  X,
-  Info
+  AlertCircle
 } from 'lucide-react';
 import { 
   ActivityDayLog, 
@@ -43,9 +40,7 @@ import {
   fetchGoogleFitActivity, 
   getStoredGoogleFitToken, 
   clearStoredGoogleFitToken,
-  getGoogleFitConfig,
-  saveGoogleFitToken,
-  GoogleFitConfig
+  saveGoogleFitToken
 } from '../services/googleFitService';
 
 interface ActivitySectionProps {
@@ -87,8 +82,6 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [durationMinutes, setDurationMinutes] = useState<number | ''>(30);
   const [notes, setNotes] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
-  const [configInfo, setConfigInfo] = useState<GoogleFitConfig | null>(null);
   const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
 
   const isGoogleFitConnected = currentDayLog.connectedService === 'google_fit' || hasStoredToken;
@@ -168,11 +161,11 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     setNotes('');
   };
 
-  // Real Google Fit Authentication & Data Fetch
+  // Real Google Fit Authentication & Data Fetch (Transparent 1-Click Flow)
   const handleConnectGoogleFit = async () => {
     setIsSyncing(true);
     try {
-      console.log('[ActivitySection] Initiating Google Fit connection...');
+      console.log('[ActivitySection] Initiating Google Fit transparent 1-click connection...');
       let token = getStoredGoogleFitToken();
 
       if (!token) {
@@ -180,13 +173,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         const authRes = await authenticateGoogleFit();
         if (!authRes.success || !authRes.accessToken) {
           console.warn('[ActivitySection] Google Fit auth failed:', authRes.message);
-          const cfg = await getGoogleFitConfig();
-          setConfigInfo(cfg);
-          if (!cfg.configured && !cfg.clientId) {
-            setShowConfigModal(true);
-          } else {
-            notificationService.notifyError(authRes.message || 'No fue posible vincular con Google Fit');
-          }
+          notificationService.notifyError(authRes.message || 'No se pudo conectar con Google Fit. Inténtalo de nuevo.');
           setIsSyncing(false);
           return;
         }
@@ -253,17 +240,6 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     } finally {
       setIsSyncing(false);
     }
-  };
-
-  // Quick simulated sync fallback for testing when Google Cloud Console is pending approval
-  const handleSimulateTestingData = () => {
-    const testSteps = Math.floor(6500 + Math.random() * 2500);
-    const testCalories = stepsToCalories(testSteps, profile.weightKg || 70);
-    onUpdateSyncData(selectedDate, 'google_fit', testSteps, testCalories);
-    notificationService.notifySuccess(
-      `Modo Prueba Activo: Sincronizados ${testSteps.toLocaleString()} pasos (${testCalories} kcal) para verificar el descuento calórico.`
-    );
-    setShowConfigModal(false);
   };
 
   const getWorkoutIcon = (type: WorkoutCategory) => {
@@ -521,24 +497,8 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             </div>
           </div>
 
-          {/* Grupo de Acciones: Configuración + Vincular/Desconectar */}
+          {/* Grupo de Acciones: Vincular / Desconectar / Sincronizar */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
-            <button
-              type="button"
-              id="btn-google-fit-config"
-              onClick={() => {
-                getGoogleFitConfig().then((cfg) => {
-                  setConfigInfo(cfg);
-                  setShowConfigModal(true);
-                });
-              }}
-              className="px-3.5 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 hover:bg-zinc-100 text-zinc-700 dark:text-zinc-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
-              title="Información de conexión y OAuth"
-            >
-              <Info className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-              <span>Configuración</span>
-            </button>
-
             {isGoogleFitConnected ? (
               <>
                 <button
@@ -570,7 +530,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                 className="py-2.5 px-5 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
               >
                 <HeartPulse className="w-4 h-4 text-emerald-100 shrink-0" />
-                <span>{isSyncing ? 'Abriendo Google OAuth...' : 'Vincular Google Fit'}</span>
+                <span>{isSyncing ? 'Conectando...' : 'Vincular Google Fit'}</span>
               </button>
             )}
           </div>
@@ -783,101 +743,6 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
           </div>
         )}
       </div>
-
-      {/* MODAL: CONFIGURACIÓN Y CREDENCIALES DE GOOGLE FIT */}
-      {showConfigModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setShowConfigModal(false)}
-              className="absolute top-5 right-5 p-1.5 rounded-xl text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 flex items-center justify-center">
-                <HeartPulse className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">
-                  Google Fitness REST API
-                </h3>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Guía de configuración OAuth 2.0 y sincronización
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3.5 text-xs text-zinc-600 dark:text-zinc-400">
-              <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700/80">
-                <span className="font-bold text-zinc-900 dark:text-zinc-200 block mb-1">
-                  1. Estado de las credenciales
-                </span>
-                <p>
-                  {configInfo?.configured ? (
-                    <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Client ID de Google configurado en el servidor
-                    </span>
-                  ) : (
-                    <span className="text-amber-600 dark:text-amber-400 font-medium">
-                      El servidor requiere <code>GOOGLE_CLIENT_ID</code> en las variables de entorno para abrir el popup de Google directamente.
-                    </span>
-                  )}
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700/80">
-                <span className="font-bold text-zinc-900 dark:text-zinc-200 block mb-1">
-                  2. Parámetros para Google Cloud Console
-                </span>
-                <div className="space-y-1.5 mt-2 font-mono text-[11px]">
-                  <div>
-                    <span className="text-zinc-400 block text-[10px] font-sans">Redirect URI autorizado:</span>
-                    <code className="p-1 rounded bg-zinc-200 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-200 break-all block">
-                      {window.location.origin}/auth/callback
-                    </code>
-                  </div>
-                  <div className="mt-1">
-                    <span className="text-zinc-400 block text-[10px] font-sans">Permisos (Scopes) solicitados:</span>
-                    <code className="p-1 rounded bg-zinc-200 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-200 break-all block text-[10px]">
-                      https://www.googleapis.com/auth/fitness.activity.read
-                    </code>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50">
-                <span className="font-bold text-emerald-800 dark:text-emerald-300 block mb-1">
-                  3. ¿Quieres probar la integración calórica ahora mismo?
-                </span>
-                <p className="text-emerald-700 dark:text-emerald-400 mb-2">
-                  Puedes inyectar una lectura de prueba para comprobar cómo se descuentan los pasos y calorías activas automáticamente de tu meta diaria.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleSimulateTestingData}
-                  className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs transition-all shadow-xs"
-                >
-                  Probar con Datos Demo (8.000 pasos / ~280 kcal)
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowConfigModal(false)}
-                className="px-4 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -3,20 +3,154 @@
   "userData": {
     "daviddesalvo.5c@gmail.com": {
       "email": "daviddesalvo.5c@gmail.com",
-      "name": "David Desalvo",
+      "name": "David Desalvo (Fundador)",
       "tier": "vip",
-      "profile": {},
+      "profile": {
+        "name": "David Desalvo (Fundador)",
+        "age": 34,
+        "gender": "male",
+        "heightCm": 182,
+        "weightKg": 83.5,
+        "activityLevel": "moderate",
+        "goal": "deficit",
+        "goalIntensity": "moderate",
+        "formula": "mifflin",
+        "targetCalories": 2000,
+        "targetProteinGrams": 140,
+        "targetCarbsGrams": 200,
+        "targetFatGrams": 55
+      },
       "dailyLogs": {
         "2026-09-08": {
           "date": "2026-09-08",
           "waterMl": 1500,
           "items": []
+        },
+        "2026-09-09": {
+          "date": "2026-09-09",
+          "foods": [
+            {
+              "id": "50b9325a-b243-4dae-a580-93e6a6838e79",
+              "name": "Huevo duro / cocido",
+              "portionDescription": "1 unidad (mediano) (50g)",
+              "amountGrams": 50,
+              "calories": 78,
+              "proteinGrams": 6.3,
+              "carbsGrams": 0.6,
+              "fatGrams": 5.3,
+              "mealType": "lunch",
+              "timeAdded": "2026-09-09T12:00:00+00:00"
+            },
+            {
+              "id": "216463ad-38a7-4995-aa85-cf57414cdd13",
+              "name": "Huevo duro / cocido",
+              "portionDescription": "1 unidad (mediano) (50g)",
+              "amountGrams": 50,
+              "calories": 78,
+              "proteinGrams": 6.3,
+              "carbsGrams": 0.6,
+              "fatGrams": 5.3,
+              "mealType": "lunch",
+              "timeAdded": "2026-09-09T12:00:00+00:00"
+            }
+          ],
+          "waterMl": 0,
+          "items": [
+            {
+              "id": "50b9325a-b243-4dae-a580-93e6a6838e79",
+              "name": "Huevo duro / cocido",
+              "portionDescription": "1 unidad (mediano) (50g)",
+              "amountGrams": 50,
+              "calories": 78,
+              "proteinGrams": 6.3,
+              "carbsGrams": 0.6,
+              "fatGrams": 5.3,
+              "mealType": "lunch",
+              "timeAdded": "2026-09-09T12:00:00+00:00"
+            },
+            {
+              "id": "216463ad-38a7-4995-aa85-cf57414cdd13",
+              "name": "Huevo duro / cocido",
+              "portionDescription": "1 unidad (mediano) (50g)",
+              "amountGrams": 50,
+              "calories": 78,
+              "proteinGrams": 6.3,
+              "carbsGrams": 0.6,
+              "fatGrams": 5.3,
+              "mealType": "lunch",
+              "timeAdded": "2026-09-09T12:00:00+00:00"
+            }
+          ]
         }
       },
-      "weightHistory": [],
+      "weightHistory": [
+        {
+          "id": "w_2026-08-18",
+          "date": "2026-08-18",
+          "weightKg": 75.2,
+          "note": "Punto de partida"
+        },
+        {
+          "id": "w_2026-08-21",
+          "date": "2026-08-21",
+          "weightKg": 75.1
+        },
+        {
+          "id": "w_2026-08-24",
+          "date": "2026-08-24",
+          "weightKg": 75.3
+        },
+        {
+          "id": "w_2026-08-27",
+          "date": "2026-08-27",
+          "weightKg": 75.2
+        },
+        {
+          "id": "w_2026-08-30",
+          "date": "2026-08-30",
+          "weightKg": 75.5
+        },
+        {
+          "id": "w_2026-09-02",
+          "date": "2026-09-02",
+          "weightKg": 75.7
+        },
+        {
+          "id": "w_2026-09-05",
+          "date": "2026-09-05",
+          "weightKg": 75.9
+        },
+        {
+          "id": "w_2026-09-08",
+          "date": "2026-09-08",
+          "weightKg": 75
+        }
+      ],
       "measurements": [],
       "progressPhotos": [],
-      "updatedAt": "2026-09-08T19:35:31.015Z"
+      "updatedAt": "2026-09-09T11:24:49.127Z"
+    },
+    "esedelespejo.psi@gmail.com": {
+      "email": "esedelespejo.psi@gmail.com",
+      "name": "David",
+      "tier": "free",
+      "dailyLogs": {},
+      "updatedAt": "2026-09-09T11:25:47.237Z",
+      "profile": {
+        "name": "David",
+        "age": 30,
+        "gender": "male",
+        "heightCm": 180,
+        "weightKg": 80,
+        "activityLevel": "moderate",
+        "goal": "deficit",
+        "goalIntensity": "moderate",
+        "formula": "mifflin",
+        "targetCalories": 2000,
+        "targetProteinGrams": 140,
+        "targetCarbsGrams": 200,
+        "targetFatGrams": 55
+      }
     }
   },
   "syncCodes": {

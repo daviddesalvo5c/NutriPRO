@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   User, 
   Scale, 
@@ -7,6 +8,7 @@ import {
   Flame, 
   Zap, 
   CheckCircle2, 
+  Check,
   Info, 
   RotateCcw, 
   Save, 
@@ -19,8 +21,10 @@ import {
   ArrowRight,
   Crown,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  Lock
 } from 'lucide-react';
+import { notificationService } from '../utils/notificationService';
 import { 
   ActivityLevel, 
   FormulaType, 
@@ -108,18 +112,18 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
 
   const bmiInfo = getBmiCategory(bmi);
 
+  const isFounder = isFounderEmail(session?.email) || isFounderEmail(profile.email);
+  const isFreeUser = (currentTier === 'free' || !currentTier) && !isFounder;
+
   // Handlers for numeric fields that allow empty string typing
   const handleAgeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    // Allow empty string or digits only
     if (val === '' || /^\d*$/.test(val)) {
       setAgeInput(val);
       if (val.trim() === '') return;
       const parsed = parseInt(val, 10);
       if (!isNaN(parsed) && parsed > 0) {
-        const updated = { ...formData, age: parsed };
-        setFormData(updated);
-        onUpdateProfile(updated);
+        setFormData((prev) => ({ ...prev, age: parsed }));
       }
     }
   };
@@ -133,24 +137,19 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
       const clamped = Math.min(120, Math.max(10, parseInt(trimmed, 10)));
       setAgeInput(String(clamped));
       if (clamped !== formData.age) {
-        const updated = { ...formData, age: clamped };
-        setFormData(updated);
-        onUpdateProfile(updated);
+        setFormData((prev) => ({ ...prev, age: clamped }));
       }
     }
   };
 
   const handleHeightChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    // Allow empty string or decimal typing
     if (val === '' || /^[\d.,]*$/.test(val)) {
       setHeightInput(val);
       if (val.trim() === '') return;
       const parsed = parseFloat(val.replace(',', '.'));
       if (!isNaN(parsed) && parsed > 0) {
-        const updated = { ...formData, heightCm: parsed };
-        setFormData(updated);
-        onUpdateProfile(updated);
+        setFormData((prev) => ({ ...prev, heightCm: parsed }));
       }
     }
   };
@@ -164,9 +163,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
       const clamped = Math.min(250, Math.max(70, parseFloat(trimmed.replace(',', '.'))));
       setHeightInput(String(clamped));
       if (clamped !== formData.heightCm) {
-        const updated = { ...formData, heightCm: clamped };
-        setFormData(updated);
-        onUpdateProfile(updated);
+        setFormData((prev) => ({ ...prev, heightCm: clamped }));
       }
     }
   };
@@ -178,9 +175,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
       if (val.trim() === '' || val.endsWith('.') || val.endsWith(',')) return;
       const parsed = parseFloat(val.replace(',', '.'));
       if (!isNaN(parsed) && parsed > 0) {
-        const updated = { ...formData, weightKg: parsed };
-        setFormData(updated);
-        onUpdateProfile(updated);
+        setFormData((prev) => ({ ...prev, weightKg: parsed }));
       }
     }
   };
@@ -195,9 +190,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
       const rounded = Math.round(clamped * 10) / 10;
       setWeightInput(String(rounded));
       if (rounded !== formData.weightKg) {
-        const updated = { ...formData, weightKg: rounded };
-        setFormData(updated);
-        onUpdateProfile(updated);
+        setFormData((prev) => ({ ...prev, weightKg: rounded }));
       }
     }
   };
@@ -208,11 +201,27 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
     const parsedHeight = parseFloat(heightInput.replace(',', '.'));
     const parsedWeight = parseFloat(weightInput.replace(',', '.'));
 
+    const finalAge = !isNaN(parsedAge) && parsedAge > 0 ? parsedAge : (formData.age || 28);
+    const finalHeight = !isNaN(parsedHeight) && parsedHeight > 0 ? parsedHeight : (formData.heightCm || 175);
+    const finalWeight = !isNaN(parsedWeight) && parsedWeight > 0 ? parsedWeight : (formData.weightKg || 75);
+
+    // Calculate updated metabolic targets according to latest formula, activity, and goals
+    const bmr = calculateBMR(finalWeight, finalHeight, finalAge, formData.gender, formData.formula);
+    const tdee = calculateTDEE(bmr, formData.activityLevel);
+    const adjustment = getCalorieAdjustment(tdee, formData.goal, formData.goalIntensity);
+    const targetCals = formData.customTargetsEnabled ? formData.targetCalories : Math.max(1100, tdee + adjustment);
+    const suggestedMacros = calculateSuggestedMacros(targetCals, finalWeight, formData.goal);
+
     const finalProfile: UserProfile = {
       ...formData,
-      age: !isNaN(parsedAge) && parsedAge > 0 ? parsedAge : formData.age,
-      heightCm: !isNaN(parsedHeight) && parsedHeight > 0 ? parsedHeight : formData.heightCm,
-      weightKg: !isNaN(parsedWeight) && parsedWeight > 0 ? parsedWeight : formData.weightKg,
+      age: finalAge,
+      heightCm: finalHeight,
+      weightKg: finalWeight,
+      targetCalories: targetCals,
+      targetProteinGrams: formData.customTargetsEnabled ? formData.targetProteinGrams : suggestedMacros.proteinGrams,
+      targetCarbsGrams: formData.customTargetsEnabled ? formData.targetCarbsGrams : suggestedMacros.carbsGrams,
+      targetFatGrams: formData.customTargetsEnabled ? formData.targetFatGrams : suggestedMacros.fatGrams,
+      updatedAt: new Date().toISOString(),
     };
 
     setFormData(finalProfile);
@@ -222,9 +231,16 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
 
     onUpdateProfile(finalProfile);
     setSavedSuccess(true);
+
+    // Provide immediate in-app Toast notification feedback
+    notificationService.notifySuccess(
+      '¡Perfil y Metas Guardados!',
+      `Tus datos (${finalProfile.age} años, ${finalProfile.heightCm} cm, ${finalProfile.weightKg} kg) y metas metabólicas (${finalProfile.targetCalories} kcal) han sido guardados y sincronizados.`
+    );
+
     setTimeout(() => {
       setSavedSuccess(false);
-    }, 3500);
+    }, 4500);
   };
 
   // Re-calculate suggested macros and optionally update targets if not customized
@@ -863,18 +879,57 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
                 <button
                   type="button"
                   id="toggle-custom-macros"
-                  onClick={() => setFormData((prev) => ({ ...prev, customTargetsEnabled: !prev.customTargetsEnabled }))}
-                  className={`text-xs px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1 border transition-all ${
-                    formData.customTargetsEnabled
+                  onClick={() => {
+                    if (isFreeUser) {
+                      onOpenPlansModal?.();
+                      return;
+                    }
+                    setFormData((prev) => ({ ...prev, customTargetsEnabled: !prev.customTargetsEnabled }));
+                  }}
+                  className={`text-xs px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 border transition-all ${
+                    isFreeUser
+                      ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300/80 dark:border-amber-700/80 hover:bg-amber-500/20 active:scale-95'
+                      : formData.customTargetsEnabled
                       ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700'
                       : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700'
                   }`}
+                  title={isFreeUser ? 'Función exclusiva del Plan Pro' : 'Alternar entre cálculo sugerido o personalización manual'}
                 >
-                  <Sliders className="w-3.5 h-3.5" />
-                  {formData.customTargetsEnabled ? 'Manual activo' : 'Modo Sugerido'}
+                  {isFreeUser ? (
+                    <>
+                      <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>Desbloquear Macros (Plan Pro)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sliders className="w-3.5 h-3.5 shrink-0" />
+                      <span>{formData.customTargetsEnabled ? 'Manual activo' : 'Modo Sugerido'}</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
+
+            {/* Aviso Exclusivo Plan Pro para usuarios Free */}
+            {isFreeUser && (
+              <div 
+                onClick={onOpenPlansModal}
+                className="mb-4 p-3 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-transparent border border-amber-300/60 dark:border-amber-700/60 flex items-center justify-between gap-3 cursor-pointer hover:bg-amber-500/15 transition-all shadow-xs"
+              >
+                <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+                  <div className="w-7 h-7 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0">
+                    <Lock className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <span className="font-bold block">Ajuste Manual de Macronutrientes</span>
+                    <span className="text-[11px] text-amber-700/80 dark:text-amber-300/80">Disponible exclusivamente con tu suscripción a Plan Pro.</span>
+                  </div>
+                </div>
+                <span className="text-xs font-black uppercase text-amber-700 dark:text-amber-300 shrink-0 flex items-center gap-1 hover:underline">
+                  Ver Plan Pro <ArrowRight className="w-3.5 h-3.5" />
+                </span>
+              </div>
+            )}
 
             {/* Visual Macro Bar */}
             <div className="mb-4">
@@ -1046,43 +1101,79 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
               )}
             </div>
 
-            {/* Action Buttons */}
-            <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 flex flex-col sm:flex-row gap-3">
-              <button
-                type="button"
-                id="save-profile-btn"
-                onClick={handleSave}
-                className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-sm font-bold rounded-xl shadow-xs hover:shadow transition-all flex items-center justify-center gap-2"
-              >
-                <Save className="w-4 h-4" />
-                Guardar Perfil & Aplicar Metas
-              </button>
+            {/* Action Buttons & Immediate Visual Confirmation */}
+            <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 space-y-3">
+              <AnimatePresence>
+                {savedSuccess && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                    className="p-3.5 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 rounded-xl flex items-center gap-3 text-emerald-900 dark:text-emerald-200 text-xs font-semibold shadow-xs"
+                  >
+                    <div className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-bold text-emerald-800 dark:text-emerald-300">
+                        ¡Perfil y metas guardados con éxito!
+                      </p>
+                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-normal mt-0.5">
+                        Tus datos ({formData.age} años, {formData.heightCm} cm, {formData.weightKg} kg) y objetivo ({formData.targetCalories} kcal) han sido sincronizados.
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
-              <button
-                type="button"
-                onClick={onNavigateToDiary}
-                className="py-3 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-1.5"
-              >
-                Ver Diario
-                <ArrowRight className="w-4 h-4" />
-              </button>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  id="save-profile-btn"
+                  onClick={handleSave}
+                  className={`flex-1 py-3 px-4 text-white text-sm font-bold rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 ${
+                    savedSuccess
+                      ? 'bg-emerald-700 hover:bg-emerald-800 ring-2 ring-emerald-400/50'
+                      : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 hover:shadow'
+                  }`}
+                >
+                  {savedSuccess ? (
+                    <>
+                      <Check className="w-4 h-4 text-white stroke-[2.5]" />
+                      <span>¡Perfil Guardado con Éxito!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>Guardar Perfil & Aplicar Metas</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onNavigateToDiary}
+                  className="py-3 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-1.5"
+                >
+                  Ver Diario
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Sincronización en la Nube y entre Dispositivos (Móvil ↔ PC) */}
-      {session && (
-        <DeviceSyncCard 
-          session={session} 
-          profile={formData} 
-          onRefreshUserData={onRefreshUserData} 
-        />
-      )}
-
-      {/* Módulo Exclusivo de Gestión de Invitados VIP & Métricas (SOLO FUNDADOR: daviddesalvo.5c@gmail.com) */}
+      {/* Módulo Exclusivo de Gestión de Invitados VIP, Métricas y Diagnóstico Técnico (SOLO FUNDADOR: daviddesalvo.5c@gmail.com) */}
       {isFounderEmail(session?.email) && session?.email && (
-        <FounderManagementPanel currentUserEmail={session.email} />
+        <>
+          <FounderManagementPanel currentUserEmail={session.email} />
+          <DeviceSyncCard 
+            session={session} 
+            profile={formData} 
+            onRefreshUserData={onRefreshUserData} 
+          />
+        </>
       )}
     </div>
   );

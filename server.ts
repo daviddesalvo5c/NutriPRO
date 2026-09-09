@@ -574,37 +574,42 @@ app.get('/api/sync/pull', async (req, res) => {
       if (supa) {
         if (supa.profile) {
           userData.name = supa.profile.full_name || userData.name;
-          userData.profile = {
-            ...(userData.profile || {}),
-            name: supa.profile.full_name || userData.name,
-            age: Number(supa.profile.age) || userData.profile?.age || 28,
-            gender: supa.profile.gender || userData.profile?.gender || 'male',
-            heightCm: Number(supa.profile.height_cm) || userData.profile?.heightCm || 175,
-            weightKg: Number(supa.profile.weight_kg) || userData.profile?.weightKg || 75,
-            activityLevel: supa.profile.activity_level || userData.profile?.activityLevel || 'moderate',
-            goal: supa.profile.goal || userData.profile?.goal || 'deficit',
-            goalIntensity: supa.profile.goal_intensity || userData.profile?.goalIntensity || 'moderate',
-            formula: supa.profile.formula || userData.profile?.formula || 'mifflin',
-            targetCalories: Number(supa.profile.target_calories) || userData.profile?.targetCalories || 2000,
-            targetProteinGrams: Number(supa.profile.target_protein) || userData.profile?.targetProteinGrams || 140,
-            targetCarbsGrams: Number(supa.profile.target_carbs) || userData.profile?.targetCarbsGrams || 200,
-            targetFatGrams: Number(supa.profile.target_fat) || userData.profile?.targetFatGrams || 55,
-          };
+          const currentProfile = userData.profile || {};
+          const hasSupaBiometrics = supa.profile.age !== null && supa.profile.age !== undefined && Number(supa.profile.age) > 0;
+
+          if (hasSupaBiometrics) {
+            userData.profile = {
+              ...currentProfile,
+              name: supa.profile.full_name || currentProfile.name || userData.name,
+              age: Number(supa.profile.age),
+              gender: supa.profile.gender || currentProfile.gender || 'male',
+              heightCm: Number(supa.profile.height_cm) || currentProfile.heightCm || 175,
+              weightKg: Number(supa.profile.weight_kg) || currentProfile.weightKg || 75,
+              activityLevel: supa.profile.activity_level || currentProfile.activityLevel || 'moderate',
+              goal: supa.profile.goal || currentProfile.goal || 'deficit',
+              goalIntensity: supa.profile.goal_intensity || currentProfile.goalIntensity || 'moderate',
+              formula: supa.profile.formula || currentProfile.formula || 'mifflin',
+              targetCalories: Number(supa.profile.target_calories) || currentProfile.targetCalories || 2000,
+              targetProteinGrams: Number(supa.profile.target_protein) || currentProfile.targetProteinGrams || 140,
+              targetCarbsGrams: Number(supa.profile.target_carbs) || currentProfile.targetCarbsGrams || 200,
+              targetFatGrams: Number(supa.profile.target_fat) || currentProfile.targetFatGrams || 55,
+            };
+          }
         }
 
         if (supa.foodRows && supa.foodRows.length > 0) {
           if (!userData.dailyLogs) userData.dailyLogs = {};
           for (const row of supa.foodRows) {
-            const date = row.created_at ? row.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10);
+            const date = row.log_date || (row.created_at ? row.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10));
             if (!userData.dailyLogs[date]) {
-              userData.dailyLogs[date] = { date, foods: [], waterMl: 0 };
+              userData.dailyLogs[date] = { date, foods: [], items: [], waterMl: 0 };
             }
-            const foods = userData.dailyLogs[date].foods || [];
+            const foods = userData.dailyLogs[date].foods || userData.dailyLogs[date].items || [];
             const exists = foods.some((f: any) => f.id === row.id);
             if (!exists) {
-              foods.push({
+              const itemObj = {
                 id: row.id,
-                name: row.food_name,
+                name: row.food_name || row.name || 'Alimento',
                 portionDescription: row.portion_description || '',
                 amountGrams: Number(row.amount_grams) || 0,
                 calories: Number(row.calories) || 0,
@@ -613,9 +618,11 @@ app.get('/api/sync/pull', async (req, res) => {
                 fatGrams: Number(row.fat) || 0,
                 mealType: row.meal_type || 'lunch',
                 timeAdded: row.created_at,
-              });
+              };
+              foods.push(itemObj);
             }
             userData.dailyLogs[date].foods = foods;
+            userData.dailyLogs[date].items = foods;
           }
         }
 
@@ -947,7 +954,46 @@ app.get('/api/founder/users', async (req, res) => {
       console.warn('[Founder Users] Notice querying profiles with service role:', pErr.message);
     }
 
-    // B. Query transactions to cross-check real-time active paid plans
+    // B. Query Supabase Auth directly via auth.admin.listUsers() to catch users registered in auth.users
+    // whose profile row was not yet created or missed by trigger
+    let authUsers: any[] = [];
+    try {
+      const { data: authData, error: aErr } = await supabaseServer.auth.admin.listUsers();
+      if (!aErr && authData?.users) {
+        authUsers = authData.users;
+      } else if (aErr) {
+        console.warn('[Founder Users] Notice listing auth.users:', aErr.message);
+      }
+    } catch (authCatchErr) {
+      console.warn('[Founder Users] Could not list auth.users:', authCatchErr);
+    }
+
+    // Auto-create missing profiles in `profiles` table for any auth.users missing a profile
+    const existingProfileEmails = new Set((profiles || []).map((p: any) => (p.email || '').toLowerCase().trim()));
+    for (const au of authUsers) {
+      const cleanEmail = (au.email || '').toLowerCase().trim();
+      if (cleanEmail && !existingProfileEmails.has(cleanEmail)) {
+        try {
+          const autoName = au.user_metadata?.full_name || cleanEmail.split('@')[0];
+          const isF = cleanEmail === FOUNDER_PRIMARY_EMAIL;
+          await supabaseServer.from('profiles').upsert({
+            id: au.id,
+            email: cleanEmail,
+            full_name: autoName,
+            subscription_plan: isF ? 'vip' : 'free',
+            is_founder: isF,
+            created_at: au.created_at || new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'email' });
+          existingProfileEmails.add(cleanEmail);
+          console.log(`[Founder Users] Auto-created profile for auth user ${cleanEmail} (${au.id})`);
+        } catch (autoProfErr) {
+          console.warn('[Founder Users] Notice auto-creating profile:', autoProfErr);
+        }
+      }
+    }
+
+    // C. Query transactions to cross-check real-time active paid plans
     const { data: txList } = await supabaseServer
       .from('transactions')
       .select('*')
@@ -963,7 +1009,7 @@ app.get('/api/founder/users', async (req, res) => {
       }
     }
 
-    // C. Aggregate profiles from Supabase and any users in local sync database
+    // D. Aggregate profiles from Supabase and any users in local sync database
     const userMap: Record<string, any> = {};
 
     if (profiles && profiles.length > 0) {
@@ -986,6 +1032,25 @@ app.get('/api/founder/users', async (req, res) => {
           targetCalories: p.target_calories ? Number(p.target_calories) : undefined,
           goal: p.goal || undefined,
           source: 'supabase_profiles',
+        };
+      }
+    }
+
+    // Also include any users directly from auth.users that may have just been registered
+    for (const au of authUsers) {
+      const clean = (au.email || '').toLowerCase().trim();
+      if (!clean) continue;
+      const isFounder = clean === FOUNDER_PRIMARY_EMAIL;
+      if (!userMap[clean]) {
+        userMap[clean] = {
+          id: au.id,
+          email: clean,
+          name: au.user_metadata?.full_name || clean.split('@')[0],
+          tier: isFounder ? 'vip' : (txPlanMap[clean] || 'free'),
+          isFounder,
+          createdAt: au.created_at || new Date().toISOString(),
+          updatedAt: au.last_sign_in_at || au.created_at || new Date().toISOString(),
+          source: 'supabase_auth',
         };
       }
     }

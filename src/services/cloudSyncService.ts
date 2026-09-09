@@ -142,13 +142,14 @@ class CloudSyncService {
     measurements?: BodyMeasurementEntry[];
     progressPhotos?: ProgressPhotoEntry[];
     tier?: SubscriptionTier;
+    userId?: string;
   }): Promise<boolean> {
     const cleanEmail = payload.email.trim().toLowerCase();
 
     // 1. Client-side direct Supabase sync
     try {
       if (payload.profile) {
-        supabaseSaveUserProfile(payload.profile, cleanEmail).catch((e) => {
+        supabaseSaveUserProfile(payload.profile, cleanEmail, payload.userId).catch((e) => {
           console.warn('Client notice saving profile to Supabase:', e);
         });
       }

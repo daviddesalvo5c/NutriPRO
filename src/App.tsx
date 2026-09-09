@@ -283,11 +283,12 @@ export default function App() {
             const localTime = currentLocal.updatedAt ? new Date(currentLocal.updatedAt).getTime() : 0;
             const remoteTime = remoteProfile.updatedAt ? new Date(remoteProfile.updatedAt).getTime() : 0;
 
-            // Only overwrite local if remote profile is newer
-            if (remoteTime >= localTime) {
+            const hasRealBiometrics = remoteProfile.age && remoteProfile.heightCm && remoteProfile.weightKg;
+            // Only overwrite local if remote profile is strictly newer and has real biometric data
+            if (remoteTime > localTime && hasRealBiometrics) {
               setProfile(remoteProfile);
               saveStoredProfileForUser(email, remoteProfile);
-            } else if (localTime > remoteTime && currentLocal.weightKg) {
+            } else if (localTime >= remoteTime && currentLocal.weightKg) {
               supabaseSaveUserProfile(currentLocal, email, userId).catch((err) =>
                 console.warn('Syncing local profile to Supabase:', err)
               );
@@ -313,8 +314,10 @@ export default function App() {
           });
         },
         onProfileChange: (freshProfile) => {
-          setProfile(freshProfile);
-          saveStoredProfileForUser(email, freshProfile);
+          if (freshProfile && freshProfile.age && freshProfile.weightKg) {
+            setProfile(freshProfile);
+            saveStoredProfileForUser(email, freshProfile);
+          }
         },
       });
     }
@@ -331,9 +334,17 @@ export default function App() {
         }
         if (cloudData.profile && Object.keys(cloudData.profile).length > 0) {
           setProfile((prev) => {
-            const mergedProfile = { ...prev, ...cloudData.profile };
-            saveStoredProfileForUser(email, mergedProfile);
-            return mergedProfile;
+            const currentLocal = loadStoredProfileForUser(email, session.name);
+            const localTime = currentLocal.updatedAt ? new Date(currentLocal.updatedAt).getTime() : 0;
+            const cloudTime = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
+
+            const hasRealCloudBiometrics = cloudData.profile?.age && cloudData.profile?.heightCm && cloudData.profile?.weightKg;
+            if (cloudTime > localTime && hasRealCloudBiometrics) {
+              const mergedProfile: UserProfile = { ...currentLocal, ...cloudData.profile };
+              saveStoredProfileForUser(email, mergedProfile);
+              return mergedProfile;
+            }
+            return prev;
           });
         }
         if (cloudData.weightHistory && cloudData.weightHistory.length > 0) {
@@ -421,18 +432,23 @@ export default function App() {
   // Save profile changes to the active user's isolated storage
   const handleUpdateProfile = (updated: UserProfile) => {
     if (!session) return;
-    setProfile(updated);
-    saveStoredProfileForUser(session.email, updated);
+    const profileWithTime: UserProfile = {
+      ...updated,
+      updatedAt: updated.updatedAt || new Date().toISOString(),
+    };
+    setProfile(profileWithTime);
+    saveStoredProfileForUser(session.email, profileWithTime);
 
     // Sync to Cloud Backend
     cloudSyncService.pushUserData({
       email: session.email,
       name: session.name,
-      profile: updated,
+      profile: profileWithTime,
+      userId: session.userId,
     }).catch((err) => console.warn('Cloud sync profile notice:', err));
 
     if (isSupabaseConfigured) {
-      supabaseSaveUserProfile(updated, session.email, session.userId).catch((err) =>
+      supabaseSaveUserProfile(profileWithTime, session.email, session.userId).catch((err) =>
         console.warn('Supabase profile save error:', err)
       );
     }
