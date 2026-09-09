@@ -126,6 +126,7 @@ export interface SubscriptionTransaction {
 }
 
 export interface AuthUser {
+  id?: string;
   email: string;
   name: string;
   password?: string;
@@ -136,10 +137,12 @@ export interface AuthUser {
 }
 
 export interface UserSession {
+  userId?: string;
   email: string;
   name: string;
   isFounder?: boolean;
   tier?: SubscriptionTier;
+  loginTime?: string;
 }
 
 // -------------------------------------------------------------

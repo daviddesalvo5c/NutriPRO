@@ -253,8 +253,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </>
               )}
 
-              {/* Install PWA Button if available */}
-              {onOpenInstallPrompt && (
+              {/* Install PWA Button if available and not yet installed */}
+              {isInstallable && onOpenInstallPrompt && (
                 <button
                   type="button"
                   id="topbar-install-pwa-btn"

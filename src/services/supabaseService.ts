@@ -168,7 +168,7 @@ export async function checkSupabaseHealth(): Promise<SupabaseStatus> {
 }
 
 // -------------------------------------------------------------
-// 1. AUTHENTICATION & USERS (Tables: users & profiles)
+// 1. AUTHENTICATION & USERS (Supabase Auth & profiles table)
 // -------------------------------------------------------------
 
 export async function supabaseLogin(
@@ -176,6 +176,7 @@ export async function supabaseLogin(
   password: string
 ): Promise<{ success: boolean; message?: string; user?: AuthUser }> {
   const cleanEmail = email.trim().toLowerCase();
+  const cleanPassword = password.trim();
 
   if (!isSupabaseConfigured) {
     return { success: false, message: 'Supabase no está configurado.' };
@@ -184,8 +185,74 @@ export async function supabaseLogin(
   try {
     const isFounder = isFounderEmail(cleanEmail);
 
-    // 1. Try profiles table first (the active Supabase table)
-    const { data: profData, error: profError } = await supabase
+    // 1. Try Native Supabase Auth signInWithPassword first
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: cleanPassword,
+      });
+
+      if (!authErr && authData?.user) {
+        const userId = authData.user.id;
+        // Fetch profile
+        const { data: profData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .maybeSingle();
+
+        const authUser: AuthUser = {
+          id: userId,
+          email: cleanEmail,
+          name: profData?.full_name || authData.user.user_metadata?.full_name || cleanEmail.split('@')[0],
+          isFounder: Boolean(profData?.is_founder || isFounder),
+          tier: (profData?.subscription_plan as SubscriptionTier) || (isFounder ? 'vip' : 'free'),
+          subscribedAt: profData?.created_at,
+          createdAt: profData?.created_at || new Date().toISOString(),
+        };
+        return { success: true, user: authUser };
+      }
+    } catch (supaAuthErr) {
+      console.warn('Notice trying direct Supabase auth:', supaAuthErr);
+    }
+
+    // 2. Fallback to server auth endpoint (which manages admin auth & profile synchronization)
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, password: cleanPassword }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.user) {
+        // Now that server confirmed or synced, retry client-side signIn if possible
+        try {
+          await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password: cleanPassword,
+          });
+        } catch {
+          // ignore client background login notice
+        }
+
+        const authUser: AuthUser = {
+          id: data.user.id || emailToUuid(cleanEmail),
+          email: data.user.email,
+          name: data.user.name,
+          isFounder: Boolean(data.user.isFounder || isFounder),
+          tier: (data.user.tier as SubscriptionTier) || (isFounder ? 'vip' : 'free'),
+          createdAt: new Date().toISOString(),
+        };
+        return { success: true, user: authUser };
+      } else if (!res.ok) {
+        return { success: false, message: data.message || 'Credenciales incorrectas.' };
+      }
+    } catch (serverErr) {
+      console.warn('Notice trying server auth login:', serverErr);
+    }
+
+    // 3. Fallback: Query profiles table directly
+    const { data: profData } = await supabase
       .from('profiles')
       .select('*')
       .eq('email', cleanEmail)
@@ -193,43 +260,22 @@ export async function supabaseLogin(
 
     if (profData) {
       const authUser: AuthUser = {
+        id: profData.id,
         email: profData.email,
         name: profData.full_name || cleanEmail.split('@')[0],
         isFounder: Boolean(profData.is_founder || isFounder),
-        tier: isFounder ? 'vip' : 'free',
+        tier: (profData.subscription_plan as SubscriptionTier) || (isFounder ? 'vip' : 'free'),
         subscribedAt: profData.created_at,
         createdAt: profData.created_at || new Date().toISOString(),
       };
       return { success: true, user: authUser };
     }
 
-    // 2. Fallback to users table if present
-    const { data: userData } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', cleanEmail)
-      .maybeSingle();
-
-    if (userData) {
-      if (userData.password && userData.password !== password.trim()) {
-        return { success: false, message: 'Contraseña incorrecta.' };
-      }
-      const authUser: AuthUser = {
-        email: userData.email,
-        name: userData.name || cleanEmail.split('@')[0],
-        isFounder: Boolean(userData.is_founder || isFounder),
-        tier: (userData.tier as SubscriptionTier) || (isFounder ? 'vip' : 'free'),
-        subscribedAt: userData.subscribed_at,
-        createdAt: userData.created_at || new Date().toISOString(),
-      };
-      return { success: true, user: authUser };
-    }
-
-    return { success: false, message: 'Usuario no encontrado en la base de datos de Supabase.' };
+    return { success: false, message: 'Usuario no encontrado en la base de datos.' };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn('Supabase login notice:', message);
-    return { success: false, message: `Excepción de conexión: ${message}` };
+    return { success: false, message: `Error de conexión: ${message}` };
   }
 }
 
@@ -240,6 +286,7 @@ export async function supabaseRegister(
 ): Promise<{ success: boolean; message?: string; user?: AuthUser }> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = name.trim();
+  const cleanPassword = password.trim();
 
   if (!isSupabaseConfigured) {
     return { success: false, message: 'Supabase no está configurado.' };
@@ -248,14 +295,47 @@ export async function supabaseRegister(
   try {
     const isFounder = isFounderEmail(cleanEmail);
     const tier: SubscriptionTier = isFounder ? 'vip' : 'free';
-    const userUuid = emailToUuid(cleanEmail);
 
-    // Upsert into profiles table
+    // 1. Register through backend server endpoint (which creates user via Supabase admin with confirmed email)
+    let userUuid: string | undefined;
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: cleanName, email: cleanEmail, password: cleanPassword }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.user) {
+        userUuid = data.user.id;
+      }
+    } catch (e) {
+      console.warn('Notice registering via server API:', e);
+    }
+
+    // 2. Authenticate client-side session in Supabase Auth
+    try {
+      const { data: authData } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: cleanPassword,
+      });
+      if (authData?.user?.id) {
+        userUuid = authData.user.id;
+      }
+    } catch (authErr) {
+      console.warn('Notice signing in client to Supabase after registration:', authErr);
+    }
+
+    if (!userUuid) {
+      userUuid = emailToUuid(cleanEmail);
+    }
+
+    // 3. Ensure profile in profiles table
     try {
       await supabase.from('profiles').upsert({
         id: userUuid,
         email: cleanEmail,
         full_name: cleanName,
+        subscription_plan: tier,
         is_founder: isFounder,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -264,21 +344,8 @@ export async function supabaseRegister(
       console.warn('Notice upserting profile in Supabase:', e);
     }
 
-    // Also attempt users table if exists
-    try {
-      await supabase.from('users').upsert({
-        email: cleanEmail,
-        name: cleanName,
-        password: password.trim(),
-        is_founder: isFounder,
-        tier,
-        created_at: new Date().toISOString(),
-      }, { onConflict: 'email' });
-    } catch {
-      // ignore
-    }
-
     const authUser: AuthUser = {
+      id: userUuid,
       email: cleanEmail,
       name: cleanName,
       isFounder,
@@ -290,7 +357,7 @@ export async function supabaseRegister(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn('Supabase register notice:', message);
-    return { success: false, message: `Excepción al conectar con Supabase: ${message}` };
+    return { success: false, message: `Error al registrar usuario en Supabase: ${message}` };
   }
 }
 
@@ -379,7 +446,10 @@ export async function supabaseUpdateUserTier(
 // 2. DIARY & FOOD ITEMS (Tables: food_logs or food_items & water_logs)
 // -------------------------------------------------------------
 
-export async function supabaseFetchDailyLogs(email: string): Promise<Record<string, DailyLog>> {
+export async function supabaseFetchDailyLogs(
+  email: string, 
+  explicitUserId?: string
+): Promise<Record<string, DailyLog>> {
   if (!isSupabaseConfigured) return {};
 
   const cleanEmail = email.trim().toLowerCase();
@@ -389,18 +459,20 @@ export async function supabaseFetchDailyLogs(email: string): Promise<Record<stri
     const foodTable = await getFoodTable();
 
     if (foodTable === 'food_logs') {
-      let userUuid = emailToUuid(cleanEmail);
-      try {
-        const { data: prof } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('email', cleanEmail)
-          .maybeSingle();
-        if (prof?.id) {
-          userUuid = prof.id;
+      let userUuid = explicitUserId || emailToUuid(cleanEmail);
+      if (!explicitUserId) {
+        try {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('email', cleanEmail)
+            .maybeSingle();
+          if (prof?.id) {
+            userUuid = prof.id;
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
 
       const { data: foodRows, error: foodError } = await supabase
@@ -500,7 +572,8 @@ export async function supabaseFetchDailyLogs(email: string): Promise<Record<stri
 export async function supabaseAddFoodItem(
   email: string, 
   date: string, 
-  item: FoodItem
+  item: FoodItem,
+  explicitUserId?: string
 ): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
 
@@ -509,12 +582,14 @@ export async function supabaseAddFoodItem(
     const foodTable = await getFoodTable();
 
     if (foodTable === 'food_logs') {
-      let userUuid = emailToUuid(cleanEmail);
-      try {
-        const { data: prof } = await supabase.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
-        if (prof?.id) userUuid = prof.id;
-      } catch {
-        // ignore
+      let userUuid = explicitUserId || emailToUuid(cleanEmail);
+      if (!explicitUserId) {
+        try {
+          const { data: prof } = await supabase.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
+          if (prof?.id) userUuid = prof.id;
+        } catch {
+          // ignore
+        }
       }
 
       const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id);
@@ -536,7 +611,7 @@ export async function supabaseAddFoodItem(
 
       const { error } = await supabase.from('food_logs').upsert([payload], { onConflict: 'id' });
       if (error) {
-        console.warn('Notice inserting food log in Supabase (profiles/RLS notice):', error.message);
+        console.warn('Notice inserting food log in Supabase:', error.message);
         return false;
       }
       return true;
@@ -574,7 +649,8 @@ export async function supabaseAddFoodItem(
 export async function supabaseAddMultipleFoods(
   email: string, 
   date: string, 
-  items: FoodItem[]
+  items: FoodItem[],
+  explicitUserId?: string
 ): Promise<boolean> {
   if (!isSupabaseConfigured || items.length === 0) return false;
 
@@ -583,12 +659,14 @@ export async function supabaseAddMultipleFoods(
     const foodTable = await getFoodTable();
 
     if (foodTable === 'food_logs') {
-      let userUuid = emailToUuid(cleanEmail);
-      try {
-        const { data: prof } = await supabase.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
-        if (prof?.id) userUuid = prof.id;
-      } catch {
-        // ignore
+      let userUuid = explicitUserId || emailToUuid(cleanEmail);
+      if (!explicitUserId) {
+        try {
+          const { data: prof } = await supabase.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
+          if (prof?.id) userUuid = prof.id;
+        } catch {
+          // ignore
+        }
       }
 
       const payload = items.map((item, idx) => {
@@ -645,7 +723,11 @@ export async function supabaseAddMultipleFoods(
   }
 }
 
-export async function supabaseRemoveFoodItem(email: string, itemId: string): Promise<boolean> {
+export async function supabaseRemoveFoodItem(
+  email: string, 
+  itemId: string,
+  explicitUserId?: string
+): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
 
   const cleanEmail = email.trim().toLowerCase();
@@ -653,10 +735,11 @@ export async function supabaseRemoveFoodItem(email: string, itemId: string): Pro
     const foodTable = await getFoodTable();
 
     if (foodTable === 'food_logs') {
-      const { error } = await supabase
-        .from('food_logs')
-        .delete()
-        .eq('id', itemId);
+      let query = supabase.from('food_logs').delete().eq('id', itemId);
+      if (explicitUserId) {
+        query = query.eq('user_id', explicitUserId);
+      }
+      const { error } = await query;
 
       if (error) {
         console.warn('Notice removing food log from Supabase:', error.message);
@@ -685,21 +768,24 @@ export async function supabaseRemoveFoodItem(email: string, itemId: string): Pro
 export async function supabaseUpdateWater(
   email: string, 
   date: string, 
-  waterMl: number
+  waterMl: number,
+  explicitUserId?: string
 ): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
 
   const cleanEmail = email.trim().toLowerCase();
+  const userUuid = explicitUserId || emailToUuid(cleanEmail);
   try {
     const { error } = await supabase
       .from('water_logs')
       .upsert({
-        id: `${cleanEmail}_${date}`,
+        id: `${userUuid}_${date}`,
+        user_id: userUuid,
         user_email: cleanEmail,
         date,
         water_ml: waterMl,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_email,date' });
+      }, { onConflict: 'user_id,date' });
 
     if (error) {
       if (error.code !== 'PGRST205') {
@@ -986,7 +1072,8 @@ export async function supabaseRecordTransaction(
 
 export async function supabaseSaveUserProfile(
   profile: UserProfile, 
-  email: string
+  email: string,
+  explicitUserId?: string
 ): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
 
@@ -994,8 +1081,18 @@ export async function supabaseSaveUserProfile(
   try {
     const table = await getProfilesTable();
     if (table === 'profiles') {
+      let userUuid = explicitUserId || emailToUuid(cleanEmail);
+      if (!explicitUserId) {
+        try {
+          const { data: prof } = await supabase.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
+          if (prof?.id) userUuid = prof.id;
+        } catch {
+          // ignore
+        }
+      }
+
       const payload = {
-        id: emailToUuid(cleanEmail),
+        id: userUuid,
         email: cleanEmail,
         full_name: profile.name,
         age: profile.age,
@@ -1057,18 +1154,24 @@ export async function supabaseSaveUserProfile(
   }
 }
 
-export async function supabaseFetchUserProfile(email: string): Promise<UserProfile | null> {
+export async function supabaseFetchUserProfile(
+  email: string,
+  explicitUserId?: string
+): Promise<UserProfile | null> {
   if (!isSupabaseConfigured) return null;
 
   const cleanEmail = email.trim().toLowerCase();
   try {
     const table = await getProfilesTable();
     if (table === 'profiles') {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('email', cleanEmail)
-        .maybeSingle();
+      let query = supabase.from('profiles').select('*');
+      if (explicitUserId) {
+        query = query.eq('id', explicitUserId);
+      } else {
+        query = query.eq('email', cleanEmail);
+      }
+
+      const { data, error } = await query.maybeSingle();
 
       if (error || !data) return null;
 
@@ -1124,6 +1227,81 @@ export async function supabaseFetchUserProfile(email: string): Promise<UserProfi
     console.warn('Notice fetching user profile from Supabase:', err);
     return null;
   }
+}
+
+/**
+ * Supabase Realtime Subscription
+ * Listens for cross-device updates (Mobile <-> PC) on food_logs and profiles
+ */
+export function supabaseSubscribeToUserData(
+  userId: string,
+  callbacks: {
+    onFoodLogsChange?: () => void;
+    onProfileChange?: (profile: UserProfile) => void;
+  }
+): () => void {
+  if (!isSupabaseConfigured || !userId) {
+    return () => {};
+  }
+
+  const channelId = `realtime-user-${userId}-${Math.random().toString(36).slice(2, 7)}`;
+  const channel = supabase
+    .channel(channelId)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'food_logs',
+        filter: `user_id=eq.${userId}`,
+      },
+      (payload) => {
+        console.log('[Supabase Realtime] food_logs change detected:', payload.eventType);
+        callbacks.onFoodLogsChange?.();
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'profiles',
+        filter: `id=eq.${userId}`,
+      },
+      (payload) => {
+        console.log('[Supabase Realtime] profiles change detected:', payload.eventType);
+        if (payload.new && typeof payload.new === 'object') {
+          const p = payload.new as any;
+          const mappedProfile: UserProfile = {
+            name: p.full_name || '',
+            age: Number(p.age) || 28,
+            gender: (p.gender as 'male' | 'female') || 'male',
+            heightCm: Number(p.height_cm) || 175,
+            weightKg: Number(p.weight_kg) || 75,
+            activityLevel: p.activity_level || 'moderate',
+            formula: p.formula || 'mifflin',
+            goal: p.goal || 'deficit',
+            goalIntensity: p.goal_intensity || 'moderate',
+            customTargetsEnabled: Boolean(p.custom_targets_enabled),
+            targetCalories: Number(p.target_calories) || 2000,
+            targetProteinGrams: Number(p.target_protein) || 140,
+            targetCarbsGrams: Number(p.target_carbs) || 200,
+            targetFatGrams: Number(p.target_fat) || 55,
+            updatedAt: p.updated_at || new Date().toISOString(),
+          };
+          callbacks.onProfileChange?.(mappedProfile);
+        } else {
+          callbacks.onFoodLogsChange?.();
+        }
+      }
+    )
+    .subscribe((status) => {
+      console.log(`[Supabase Realtime] Status for user ${userId}:`, status);
+    });
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 export async function supabaseCheckWritePermissions(): Promise<{

@@ -21,8 +21,11 @@ import {
   supabaseUpdateWater,
   supabaseSaveUserProfile,
   supabaseFetchUserProfile,
+  supabaseSubscribeToUserData,
+  emailToUuid,
   isSupabaseConfigured
 } from './services/supabaseService';
+import { supabase } from './lib/supabase';
 import { cloudSyncService } from './services/cloudSyncService';
 import { 
   DailyLog, 
@@ -183,124 +186,178 @@ export default function App() {
     return [];
   });
 
-  // Whenever session changes, reload that user's private data
+  // Listen for native Supabase Auth session changes on startup
   useEffect(() => {
-    if (session) {
-      // 1. Instant local load from device storage
-      const userProfile = loadStoredProfileForUser(session.email, session.name);
-      const userLogs = loadDailyLogsForUser(session.email);
-      const userWeights = loadWeightHistoryForUser(session.email, userProfile.weightKg);
-      const userMeasurements = loadMeasurementsForUser(session.email);
-      const userPhotos = loadProgressPhotosForUser(session.email);
-      const userActivity = loadActivityLogsForUser(session.email);
-      const userDiscount = loadDiscountActivityCaloriesPreference(session.email);
+    if (!isSupabaseConfigured) return;
 
-      setProfile(userProfile);
-      setDailyLogs(userLogs);
-      setActivityLogs(userActivity);
-      setDiscountActivityCalories(userDiscount);
-      setWeightHistory(userWeights);
-      setMeasurements(userMeasurements);
-      setProgressPhotos(userPhotos);
-      setCurrentTier(getUserTier(session.email));
+    supabase.auth.getSession().then(({ data: { session: sbSession } }) => {
+      if (sbSession?.user) {
+        setSession((prev) => {
+          if (prev && prev.email.toLowerCase() === sbSession.user.email?.toLowerCase()) {
+            if (prev.userId !== sbSession.user.id) {
+              const updated = { ...prev, userId: sbSession.user.id };
+              saveActiveSession(updated);
+              return updated;
+            }
+            return prev;
+          }
+          const email = sbSession.user.email || '';
+          const name = sbSession.user.user_metadata?.full_name || email.split('@')[0];
+          const newSess: UserSession = {
+            email,
+            name,
+            userId: sbSession.user.id,
+            loginTime: new Date().toISOString(),
+          };
+          saveActiveSession(newSess);
+          return newSess;
+        });
+      }
+    }).catch((err) => console.warn('Supabase getSession notice:', err));
 
-      // 2. Real-time Cloud Synchronization (Mobile <-> PC cross-device)
-      cloudSyncService.pullUserData(session.email).then((cloudData) => {
-        if (cloudData) {
-          // Merge daily logs from cloud
-          if (cloudData.dailyLogs && Object.keys(cloudData.dailyLogs).length > 0) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sbSession) => {
+      if (sbSession?.user) {
+        setSession((prev) => {
+          const email = sbSession.user.email || '';
+          const name = sbSession.user.user_metadata?.full_name || email.split('@')[0];
+          const updated: UserSession = {
+            email,
+            name,
+            userId: sbSession.user.id,
+            loginTime: prev?.loginTime || new Date().toISOString(),
+          };
+          saveActiveSession(updated);
+          return updated;
+        });
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // Whenever session changes, reload that user's private data & connect automatic Realtime sync
+  useEffect(() => {
+    if (!session) return;
+
+    const email = session.email;
+    const userId = session.userId || emailToUuid(email);
+
+    // 1. Instant local load from device storage
+    const userProfile = loadStoredProfileForUser(email, session.name);
+    const userLogs = loadDailyLogsForUser(email);
+    const userWeights = loadWeightHistoryForUser(email, userProfile.weightKg);
+    const userMeasurements = loadMeasurementsForUser(email);
+    const userPhotos = loadProgressPhotosForUser(email);
+    const userActivity = loadActivityLogsForUser(email);
+    const userDiscount = loadDiscountActivityCaloriesPreference(email);
+
+    setProfile(userProfile);
+    setDailyLogs(userLogs);
+    setActivityLogs(userActivity);
+    setDiscountActivityCalories(userDiscount);
+    setWeightHistory(userWeights);
+    setMeasurements(userMeasurements);
+    setProgressPhotos(userPhotos);
+    setCurrentTier(getUserTier(email));
+
+    // 2. 100% Automatic Native Supabase Fetch (Mobile ↔ PC automatic data hydration)
+    if (isSupabaseConfigured) {
+      supabaseFetchDailyLogs(email, userId)
+        .then((remoteLogs) => {
+          if (remoteLogs && Object.keys(remoteLogs).length > 0) {
             setDailyLogs((prev) => {
-              const mergedLogs = { ...prev, ...cloudData.dailyLogs };
-              saveDailyLogsForUser(session.email, mergedLogs);
-              return mergedLogs;
+              const merged = { ...prev, ...remoteLogs };
+              saveDailyLogsForUser(email, merged);
+              return merged;
             });
-          } else if (userLogs && Object.keys(userLogs).length > 0) {
-            // Local device has logs but cloud doesn't: push to cloud!
-            cloudSyncService.pushUserData({ email: session.email, dailyLogs: userLogs });
           }
+        })
+        .catch((err) => console.warn('Supabase fetch logs notice:', err));
 
-          // Merge profile
-          if (cloudData.profile && Object.keys(cloudData.profile).length > 0) {
-            setProfile((prev) => {
-              const mergedProfile = { ...prev, ...cloudData.profile };
-              saveStoredProfileForUser(session.email, mergedProfile);
-              return mergedProfile;
-            });
-          } else if (userProfile.weightKg) {
-            cloudSyncService.pushUserData({ email: session.email, profile: userProfile });
-          }
+      supabaseFetchUserProfile(email, userId)
+        .then((remoteProfile) => {
+          if (remoteProfile) {
+            const currentLocal = loadStoredProfileForUser(email, session.name);
+            const localTime = currentLocal.updatedAt ? new Date(currentLocal.updatedAt).getTime() : 0;
+            const remoteTime = remoteProfile.updatedAt ? new Date(remoteProfile.updatedAt).getTime() : 0;
 
-          // Sync weight history
-          if (cloudData.weightHistory && cloudData.weightHistory.length > 0) {
-            setWeightHistory(cloudData.weightHistory);
-            saveWeightHistoryForUser(session.email, cloudData.weightHistory);
-          } else if (userWeights.length > 0) {
-            cloudSyncService.pushUserData({ email: session.email, weightHistory: userWeights });
+            // Only overwrite local if remote profile is newer
+            if (remoteTime >= localTime) {
+              setProfile(remoteProfile);
+              saveStoredProfileForUser(email, remoteProfile);
+            } else if (localTime > remoteTime && currentLocal.weightKg) {
+              supabaseSaveUserProfile(currentLocal, email, userId).catch((err) =>
+                console.warn('Syncing local profile to Supabase:', err)
+              );
+            }
           }
+        })
+        .catch((err) => console.warn('Supabase fetch profile notice:', err));
+    }
 
-          // Sync measurements
-          if (cloudData.measurements && cloudData.measurements.length > 0) {
-            setMeasurements(cloudData.measurements);
-            saveMeasurementsForUser(session.email, cloudData.measurements);
-          }
+    // 3. Supabase Realtime Subscription (Instant live reflection between Mobile and PC)
+    let unsubscribeRealtime = () => {};
+    if (isSupabaseConfigured && userId) {
+      unsubscribeRealtime = supabaseSubscribeToUserData(userId, {
+        onFoodLogsChange: () => {
+          supabaseFetchDailyLogs(email, userId).then((freshLogs) => {
+            if (freshLogs) {
+              setDailyLogs((prev) => {
+                const merged = { ...prev, ...freshLogs };
+                saveDailyLogsForUser(email, merged);
+                return merged;
+              });
+            }
+          });
+        },
+        onProfileChange: (freshProfile) => {
+          setProfile(freshProfile);
+          saveStoredProfileForUser(email, freshProfile);
+        },
+      });
+    }
 
-          // Sync tier
-          if (cloudData.tier) {
-            setCurrentTier(cloudData.tier);
-            setUserTier(session.email, cloudData.tier);
-          }
-        } else {
-          // No cloud records yet; push this device's full state to initialize the cloud
-          cloudSyncService.pushUserData({
-            email: session.email,
-            name: session.name,
-            profile: userProfile,
-            dailyLogs: userLogs,
-            weightHistory: userWeights,
-            measurements: userMeasurements,
-            progressPhotos: userPhotos,
-            tier: getUserTier(session.email),
+    // 4. Secondary background sync with cloudSyncService for offline/legacy fallback
+    cloudSyncService.pullUserData(email).then((cloudData) => {
+      if (cloudData) {
+        if (cloudData.dailyLogs && Object.keys(cloudData.dailyLogs).length > 0) {
+          setDailyLogs((prev) => {
+            const mergedLogs = { ...prev, ...cloudData.dailyLogs };
+            saveDailyLogsForUser(email, mergedLogs);
+            return mergedLogs;
           });
         }
-      }).catch((err) => console.warn('Cloud sync pull notice:', err));
-
-      // 3. Attempt background fetch from Supabase if connected
-      if (isSupabaseConfigured) {
-        supabaseFetchDailyLogs(session.email)
-          .then((remoteLogs) => {
-            if (remoteLogs && Object.keys(remoteLogs).length > 0) {
-              setDailyLogs((prev) => ({ ...prev, ...remoteLogs }));
-              saveDailyLogsForUser(session.email, remoteLogs);
-            }
-          })
-          .catch((err) => console.warn('Supabase fetch logs:', err));
-
-        supabaseFetchUserProfile(session.email)
-          .then((remoteProfile) => {
-            if (remoteProfile) {
-              const currentLocal = loadStoredProfileForUser(session.email, session.name);
-              const localTime = currentLocal.updatedAt ? new Date(currentLocal.updatedAt).getTime() : 0;
-              const remoteTime = remoteProfile.updatedAt ? new Date(remoteProfile.updatedAt).getTime() : 0;
-
-              // Only overwrite local if remote profile is strictly newer
-              if (remoteTime > localTime) {
-                setProfile(remoteProfile);
-                saveStoredProfileForUser(session.email, remoteProfile);
-              } else if (localTime > remoteTime && currentLocal.weightKg) {
-                // Local is more up-to-date; push newest local values to Supabase
-                supabaseSaveUserProfile(currentLocal, session.email).catch((err) =>
-                  console.warn('Syncing local profile to Supabase:', err)
-                );
-              }
-            }
-          })
-          .catch((err) => console.warn('Supabase fetch profile:', err));
+        if (cloudData.profile && Object.keys(cloudData.profile).length > 0) {
+          setProfile((prev) => {
+            const mergedProfile = { ...prev, ...cloudData.profile };
+            saveStoredProfileForUser(email, mergedProfile);
+            return mergedProfile;
+          });
+        }
+        if (cloudData.weightHistory && cloudData.weightHistory.length > 0) {
+          setWeightHistory(cloudData.weightHistory);
+          saveWeightHistoryForUser(email, cloudData.weightHistory);
+        }
+        if (cloudData.measurements && cloudData.measurements.length > 0) {
+          setMeasurements(cloudData.measurements);
+          saveMeasurementsForUser(email, cloudData.measurements);
+        }
+        if (cloudData.tier) {
+          setCurrentTier(cloudData.tier);
+          setUserTier(email, cloudData.tier);
+        }
       }
+    }).catch((err) => console.warn('Cloud sync pull notice:', err));
 
-      // Check browser periodic notifications
-      notificationService.schedulePeriodicReminders();
-    }
-  }, [session?.email]);
+    // Check browser periodic notifications
+    notificationService.schedulePeriodicReminders();
+
+    return () => {
+      unsubscribeRealtime();
+    };
+  }, [session?.email, session?.userId]);
 
   // Handle successful login or registration
   const handleLoginSuccess = (newSession: UserSession) => {
@@ -356,6 +413,9 @@ export default function App() {
     clearActiveSession();
     setSession(null);
     setActiveTab('diary');
+    if (isSupabaseConfigured) {
+      supabase.auth.signOut().catch(() => {});
+    }
   };
 
   // Save profile changes to the active user's isolated storage
@@ -372,7 +432,7 @@ export default function App() {
     }).catch((err) => console.warn('Cloud sync profile notice:', err));
 
     if (isSupabaseConfigured) {
-      supabaseSaveUserProfile(updated, session.email).catch((err) =>
+      supabaseSaveUserProfile(updated, session.email, session.userId).catch((err) =>
         console.warn('Supabase profile save error:', err)
       );
     }
@@ -419,9 +479,9 @@ export default function App() {
       console.warn('Cloud sync add item notice:', err)
     );
 
-    // Sync to Supabase in background
+    // Sync to Supabase in background with explicit user_id
     if (isSupabaseConfigured) {
-      supabaseAddFoodItem(session.email, date, newItem).catch((err) =>
+      supabaseAddFoodItem(session.email, date, newItem, session.userId).catch((err) =>
         console.warn('Supabase add food error:', err)
       );
     }
@@ -463,9 +523,9 @@ export default function App() {
       totalCal
     );
 
-    // Sync to Supabase in background
+    // Sync to Supabase in background with explicit user_id
     if (isSupabaseConfigured) {
-      supabaseAddMultipleFoods(session.email, selectedDate, newItems).catch((err) =>
+      supabaseAddMultipleFoods(session.email, selectedDate, newItems, session.userId).catch((err) =>
         console.warn('Supabase add multiple foods error:', err)
       );
     }
@@ -494,7 +554,7 @@ export default function App() {
     );
 
     if (isSupabaseConfigured) {
-      supabaseRemoveFoodItem(session.email, itemId).catch((err) =>
+      supabaseRemoveFoodItem(session.email, itemId, session.userId).catch((err) =>
         console.warn('Supabase remove food error:', err)
       );
     }
@@ -530,7 +590,7 @@ export default function App() {
 
     // Sync to Supabase
     if (isSupabaseConfigured) {
-      supabaseUpdateWater(session.email, date, amountMl).catch((err) =>
+      supabaseUpdateWater(session.email, date, amountMl, session.userId).catch((err) =>
         console.warn('Supabase update water error:', err)
       );
     }
@@ -850,7 +910,7 @@ export default function App() {
 
       {/* PWA Custom Premium Install Modal */}
       <PWAInstallModal
-        isOpen={showPrompt}
+        isOpen={showPrompt && !isInstalled}
         onClose={closePrompt}
         onInstall={install}
         isIOS={isIOS}

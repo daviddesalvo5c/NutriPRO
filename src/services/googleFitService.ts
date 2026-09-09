@@ -21,6 +21,7 @@ export interface GoogleFitSyncResult {
 export interface GoogleFitConfig {
   configured: boolean;
   clientId: string;
+  hasClientSecret?: boolean;
   redirectUri: string;
   scopes: string;
 }
@@ -29,15 +30,18 @@ export interface GoogleFitConfig {
  * Get Google Fit OAuth config from backend
  */
 export async function getGoogleFitConfig(): Promise<GoogleFitConfig> {
+  const appOrigin = window.location.origin;
   try {
-    const res = await fetch('/api/google-fit/config');
+    const res = await fetch(`/api/google-fit/config?origin=${encodeURIComponent(appOrigin)}`);
     if (res.ok) {
-      return await res.json();
+      const data = await res.json();
+      console.log('[GoogleFit Client] Backend config loaded:', data);
+      return data;
     }
   } catch (err) {
-    console.warn('Notice loading Google Fit config:', err);
+    console.warn('[GoogleFit Client] Failed loading Google Fit config from backend:', err);
   }
-  const appOrigin = window.location.origin;
+
   return {
     configured: Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID),
     clientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
@@ -58,6 +62,7 @@ export function getStoredGoogleFitToken(): string | null {
     }
     // Expired or missing
     if (token && exp && Date.now() >= exp) {
+      console.warn('[GoogleFit Client] Stored token has expired. Clearing cache.');
       clearStoredGoogleFitToken();
       return null;
     }
@@ -74,8 +79,9 @@ export function saveGoogleFitToken(token: string, expiresInSeconds: number = 360
     sessionStorage.setItem(STORAGE_EXPIRY_KEY, String(exp));
     localStorage.setItem(STORAGE_TOKEN_KEY, token);
     localStorage.setItem(STORAGE_EXPIRY_KEY, String(exp));
-  } catch {
-    // ignore
+    console.log('[GoogleFit Client] Google Fit access token stored successfully.');
+  } catch (err) {
+    console.error('[GoogleFit Client] Error saving token to storage:', err);
   }
 }
 
@@ -85,6 +91,7 @@ export function clearStoredGoogleFitToken(): void {
     sessionStorage.removeItem(STORAGE_EXPIRY_KEY);
     localStorage.removeItem(STORAGE_TOKEN_KEY);
     localStorage.removeItem(STORAGE_EXPIRY_KEY);
+    console.log('[GoogleFit Client] Cleared stored Google Fit tokens.');
   } catch {
     // ignore
   }
@@ -95,36 +102,41 @@ export function clearStoredGoogleFitToken(): void {
  * Listens for cross-origin postMessage from the popup window callback.
  */
 export async function authenticateGoogleFit(): Promise<{ success: boolean; accessToken?: string; message?: string }> {
+  console.log('[GoogleFit Client] Starting authentication flow...');
   const config = await getGoogleFitConfig();
 
   // If GSI (Google Identity Services) client is available in window
   if ((window as any).google?.accounts?.oauth2 && config.clientId) {
+    console.log('[GoogleFit Client] Google Identity Services (GSI) detected. Initializing TokenClient...');
     return new Promise((resolve) => {
       try {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: config.clientId,
-          scope: 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/fitness.body.read',
+          scope: 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/fitness.body.read https://www.googleapis.com/auth/userinfo.profile',
           callback: (response: any) => {
+            console.log('[GoogleFit Client] GSI response received:', response);
             if (response && response.access_token) {
               const exp = response.expires_in ? Number(response.expires_in) : 3600;
               saveGoogleFitToken(response.access_token, exp);
               resolve({ success: true, accessToken: response.access_token });
             } else if (response && response.error) {
+              console.error('[GoogleFit Client] GSI Auth error:', response.error, response.error_description);
               resolve({ success: false, message: response.error_description || response.error });
             } else {
-              resolve({ success: false, message: 'Autenticación cancelada o fallida.' });
+              resolve({ success: false, message: 'Autenticación cancelada o fallida por el usuario.' });
             }
           },
         });
         client.requestAccessToken({ prompt: 'consent' });
       } catch (err: any) {
-        console.warn('GSI client error, falling back to popup:', err);
+        console.warn('[GoogleFit Client] GSI client failed, falling back to popup flow:', err);
         launchOAuthPopup(config, resolve);
       }
     });
   }
 
   // Popup-based OAuth flow directly opening Google's OAuth URL
+  console.log('[GoogleFit Client] Launching standard OAuth 2.0 popup...');
   return new Promise((resolve) => {
     launchOAuthPopup(config, resolve);
   });
@@ -135,7 +147,7 @@ function launchOAuthPopup(
   resolve: (val: { success: boolean; accessToken?: string; message?: string }) => void
 ) {
   if (!config.configured && !config.clientId) {
-    // Notice to configure Google Client ID
+    console.warn('[GoogleFit Client] No GOOGLE_CLIENT_ID configured.');
     resolve({
       success: false,
       message: 'GOOGLE_CLIENT_ID no configurado. Se requiere un Client ID de Google Cloud Console con la API Google Fitness activada.',
@@ -146,11 +158,14 @@ function launchOAuthPopup(
   const clientId = config.clientId;
   const redirectUri = encodeURIComponent(config.redirectUri);
   const scopes = encodeURIComponent(config.scopes);
+  const responseType = config.hasClientSecret ? 'code' : 'token';
 
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=token&scope=${scopes}&include_granted_scopes=true&prompt=consent`;
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=${responseType}&scope=${scopes}&include_granted_scopes=true&prompt=consent`;
 
-  const width = 520;
-  const height = 650;
+  console.log(`[GoogleFit Client] Opening popup for URL (response_type=${responseType})...`);
+
+  const width = 540;
+  const height = 660;
   const left = window.screenX + (window.outerWidth - width) / 2;
   const top = window.screenY + (window.outerHeight - height) / 2;
 
@@ -161,6 +176,7 @@ function launchOAuthPopup(
   );
 
   if (!popup) {
+    console.error('[GoogleFit Client] Popup was blocked by the browser.');
     resolve({
       success: false,
       message: 'El navegador bloqueó la ventana emergente. Por favor permite popups para conectar Google Fit.',
@@ -170,20 +186,51 @@ function launchOAuthPopup(
 
   let resolved = false;
 
-  const handleMessage = (event: MessageEvent) => {
+  const handleMessage = async (event: MessageEvent) => {
     // Validate message type
     if (event.data && event.data.type === 'GOOGLE_FIT_AUTH_RESULT') {
       resolved = true;
       window.removeEventListener('message', handleMessage);
       clearInterval(timer);
 
-      if (event.data.success && event.data.accessToken) {
-        saveGoogleFitToken(event.data.accessToken, 3600);
+      console.log('[GoogleFit Client] PostMessage received from OAuth callback:', event.data);
+
+      if (event.data.accessToken) {
+        const exp = event.data.expiresIn || 3600;
+        saveGoogleFitToken(event.data.accessToken, exp);
         resolve({ success: true, accessToken: event.data.accessToken });
+      } else if (event.data.code) {
+        console.log('[GoogleFit Client] Exchanging authorization code with backend...');
+        try {
+          const exRes = await fetch('/api/google-fit/token-exchange', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: event.data.code,
+              redirectUri: config.redirectUri,
+            }),
+          });
+          const exData = await exRes.json();
+          if (exRes.ok && exData.accessToken) {
+            saveGoogleFitToken(exData.accessToken, exData.expiresIn || 3600);
+            resolve({ success: true, accessToken: exData.accessToken });
+          } else {
+            console.error('[GoogleFit Client] Code exchange failure:', exData);
+            resolve({
+              success: false,
+              message: exData.message || 'Error al canjear el código de autorización con Google.',
+            });
+          }
+        } catch (exErr: any) {
+          console.error('[GoogleFit Client] Exception during code exchange:', exErr);
+          resolve({ success: false, message: exErr.message || 'Fallo de red al canjear el token de Google.' });
+        }
       } else {
+        const errorMsg = event.data.error || 'No se concedieron los permisos solicitados de Google Fit.';
+        console.warn('[GoogleFit Client] Authentication failed or denied:', errorMsg);
         resolve({
           success: false,
-          message: event.data.error || 'No se concedieron los permisos solicitados de Google Fit.',
+          message: errorMsg,
         });
       }
     }
@@ -196,6 +243,7 @@ function launchOAuthPopup(
     if (popup.closed && !resolved) {
       clearInterval(timer);
       window.removeEventListener('message', handleMessage);
+      console.warn('[GoogleFit Client] Popup window closed before completion.');
       resolve({ success: false, message: 'La ventana de autenticación fue cerrada antes de completar la vinculación.' });
     }
   }, 1000);
@@ -211,8 +259,11 @@ export async function fetchGoogleFitActivity(
   const token = providedToken || getStoredGoogleFitToken();
 
   if (!token) {
+    console.warn('[GoogleFit Client] No token found for fetchGoogleFitActivity');
     throw new Error('NO_TOKEN');
   }
+
+  console.log(`[GoogleFit Client] Calling /api/google-fit/activity for date=${targetDateStr}...`);
 
   const response = await fetch('/api/google-fit/activity', {
     method: 'POST',
@@ -224,15 +275,20 @@ export async function fetchGoogleFitActivity(
   });
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
+    console.error(`[GoogleFit Client] Activity request failed with HTTP ${response.status}`);
+    if (response.status === 401) {
       clearStoredGoogleFitToken();
       throw new Error('TOKEN_EXPIRED');
+    }
+    if (response.status === 403) {
+      throw new Error('Permisos insuficientes en Google Fit. Asegúrate de conceder acceso a actividad física (fitness.activity.read) y métricas corporales (fitness.body.read).');
     }
     const errData = await response.json().catch(() => ({}));
     throw new Error(errData.message || `Error del servidor al consultar Google Fit (${response.status})`);
   }
 
   const data = await response.json();
+  console.log('[GoogleFit Client] Activity data received successfully:', data);
   return {
     success: true,
     steps: data.steps || 0,

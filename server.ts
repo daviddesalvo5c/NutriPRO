@@ -220,16 +220,18 @@ function emailToUuid(email: string): string {
   return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-4${hash.substring(13, 16)}-a${hash.substring(17, 20)}-${hash.substring(20, 32)}`;
 }
 
-async function syncUserToSupabase(email: string, payload: any) {
+async function syncUserToSupabase(email: string, payload: any, explicitUserId?: string) {
   try {
     const cleanEmail = email.trim().toLowerCase();
     const fallbackUuid = emailToUuid(cleanEmail);
 
     // 1. Sync Profile to Supabase profiles table
-    let userUuid = fallbackUuid;
-    const { data: existingProf } = await supabaseServer.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
-    if (existingProf && existingProf.id) {
-      userUuid = existingProf.id;
+    let userUuid = explicitUserId || fallbackUuid;
+    if (!explicitUserId) {
+      const { data: existingProf } = await supabaseServer.from('profiles').select('id').eq('email', cleanEmail).maybeSingle();
+      if (existingProf && existingProf.id) {
+        userUuid = existingProf.id;
+      }
     }
 
     if (payload.profile || payload.name) {
@@ -296,16 +298,27 @@ async function syncUserToSupabase(email: string, payload: any) {
   }
 }
 
-async function pullUserFromSupabase(email: string) {
+async function pullUserFromSupabase(email: string, explicitUserId?: string) {
   try {
     const cleanEmail = email.trim().toLowerCase();
     const fallbackUuid = emailToUuid(cleanEmail);
 
-    const { data: prof } = await supabaseServer.from('profiles').select('*').eq('email', cleanEmail).maybeSingle();
-    const userUuid = prof?.id || fallbackUuid;
+    let userUuid = explicitUserId || fallbackUuid;
+    let prof: any = null;
+
+    if (explicitUserId) {
+      const { data: p } = await supabaseServer.from('profiles').select('*').eq('id', explicitUserId).maybeSingle();
+      prof = p;
+    }
+    if (!prof) {
+      const { data: p } = await supabaseServer.from('profiles').select('*').eq('email', cleanEmail).maybeSingle();
+      prof = p;
+      if (prof?.id) userUuid = prof.id;
+    }
+
     const { data: foodRows } = await supabaseServer.from('food_logs').select('*').eq('user_id', userUuid);
 
-    return { profile: prof, foodRows };
+    return { profile: prof, foodRows, userUuid };
   } catch (err) {
     console.warn('Notice pulling from Supabase:', err);
     return null;
@@ -367,25 +380,69 @@ function saveSyncDatabase(db: StoredSyncDatabase) {
 // In-memory cache synced with disk
 let db = loadSyncDatabase();
 
-// 1. Register User in Cloud Store
-app.post('/api/auth/register', (req, res) => {
+// 1. Register User in Cloud Store & Supabase Auth
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!email || !name) {
       return res.status(400).json({ success: false, message: 'Nombre y correo son requeridos.' });
     }
     const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
+    const cleanPassword = password ? String(password).trim() : 'Password123!';
     const isFounder = cleanEmail === 'daviddesalvo.5c@gmail.com';
     const tier = isFounder ? 'vip' : 'free';
 
-    if (db.users[cleanEmail]) {
-      return res.status(400).json({ success: false, message: 'El usuario ya existe en la nube.' });
+    let userUuid = emailToUuid(cleanEmail);
+
+    // Ensure user exists in Supabase Auth via admin (auto confirmed)
+    try {
+      const { data: list } = await supabaseServer.auth.admin.listUsers();
+      const existingAuth = list?.users?.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+      if (existingAuth) {
+        userUuid = existingAuth.id;
+        if (cleanPassword) {
+          await supabaseServer.auth.admin.updateUserById(existingAuth.id, {
+            password: cleanPassword,
+            email_confirm: true,
+            user_metadata: { full_name: cleanName }
+          });
+        }
+      } else {
+        const { data: created, error: createErr } = await supabaseServer.auth.admin.createUser({
+          email: cleanEmail,
+          password: cleanPassword,
+          email_confirm: true,
+          user_metadata: { full_name: cleanName }
+        });
+        if (created?.user?.id) {
+          userUuid = created.user.id;
+        } else if (createErr) {
+          console.warn('Notice creating Supabase auth user:', createErr.message);
+        }
+      }
+    } catch (authErr) {
+      console.warn('Notice in Supabase auth registration check:', authErr);
+    }
+
+    // Upsert into profiles table
+    try {
+      await supabaseServer.from('profiles').upsert({
+        id: userUuid,
+        email: cleanEmail,
+        full_name: cleanName,
+        subscription_plan: tier,
+        is_founder: isFounder,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'email' });
+    } catch (profErr) {
+      console.warn('Notice upserting Supabase profile:', profErr);
     }
 
     db.users[cleanEmail] = {
       email: cleanEmail,
-      name: name.trim(),
-      password: password ? String(password).trim() : undefined,
+      name: cleanName,
+      password: cleanPassword,
       tier,
       isFounder,
       createdAt: new Date().toISOString(),
@@ -395,7 +452,7 @@ app.post('/api/auth/register', (req, res) => {
     if (!db.userData[cleanEmail]) {
       db.userData[cleanEmail] = {
         email: cleanEmail,
-        name: name.trim(),
+        name: cleanName,
         tier,
         dailyLogs: {},
         updatedAt: new Date().toISOString(),
@@ -406,8 +463,9 @@ app.post('/api/auth/register', (req, res) => {
     return res.json({
       success: true,
       user: {
+        id: userUuid,
         email: cleanEmail,
-        name: name.trim(),
+        name: cleanName,
         isFounder,
         tier,
       },
@@ -417,8 +475,8 @@ app.post('/api/auth/register', (req, res) => {
   }
 });
 
-// 2. Login User in Cloud Store
-app.post('/api/auth/login', (req, res) => {
+// 2. Login User in Cloud Store & Supabase Auth
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email) {
@@ -429,33 +487,63 @@ app.post('/api/auth/login', (req, res) => {
 
     // Founder check
     if (cleanEmail === 'daviddesalvo.5c@gmail.com' && cleanPassword === 'minplan13') {
+      let founderUuid = 'ab1a02a2-99f9-402f-81a3-025a2c89fb62';
+      try {
+        const { data: fProf } = await supabaseServer.from('profiles').select('id, full_name, subscription_plan').eq('email', cleanEmail).maybeSingle();
+        if (fProf?.id) founderUuid = fProf.id;
+      } catch {}
+
       return res.json({
         success: true,
         user: {
+          id: founderUuid,
           email: 'daviddesalvo.5c@gmail.com',
-          name: 'David De Salvo',
+          name: 'David Desalvo (Fundador)',
           isFounder: true,
           tier: 'vip',
         },
       });
     }
 
-    const user = db.users[cleanEmail];
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'Usuario no encontrado en la base de datos de sincronización.' });
-    }
+    let userUuid = emailToUuid(cleanEmail);
+    let userName = cleanEmail.split('@')[0];
+    let userTier = 'free';
+    const isFounder = cleanEmail === 'daviddesalvo.5c@gmail.com';
 
-    if (user.password && user.password !== cleanPassword) {
-      return res.status(401).json({ success: false, message: 'Contraseña incorrecta.' });
+    // Verify or fetch from Supabase
+    try {
+      const { data: prof } = await supabaseServer.from('profiles').select('*').eq('email', cleanEmail).maybeSingle();
+      if (prof) {
+        userUuid = prof.id;
+        userName = prof.full_name || userName;
+        userTier = prof.subscription_plan || (isFounder ? 'vip' : 'free');
+      } else {
+        const { data: list } = await supabaseServer.auth.admin.listUsers();
+        const existingAuth = list?.users?.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+        if (existingAuth) {
+          userUuid = existingAuth.id;
+          userName = existingAuth.user_metadata?.full_name || userName;
+        }
+      }
+    } catch {}
+
+    const user = db.users[cleanEmail];
+    if (user) {
+      if (user.password && user.password !== cleanPassword) {
+        return res.status(401).json({ success: false, message: 'Contraseña incorrecta.' });
+      }
+      userName = user.name || userName;
+      userTier = user.tier || userTier;
     }
 
     return res.json({
       success: true,
       user: {
-        email: user.email,
-        name: user.name,
-        isFounder: user.isFounder,
-        tier: user.tier,
+        id: userUuid,
+        email: cleanEmail,
+        name: userName,
+        isFounder,
+        tier: userTier,
       },
     });
   } catch (err: any) {
@@ -467,6 +555,7 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/sync/pull', async (req, res) => {
   try {
     const email = req.query.email as string;
+    const explicitUserId = req.query.userId as string | undefined;
     if (!email) {
       return res.status(400).json({ success: false, message: 'Email param required' });
     }
@@ -481,7 +570,7 @@ app.get('/api/sync/pull', async (req, res) => {
 
     // Pull directly from Supabase database to ensure cross-device consistency
     try {
-      const supa = await pullUserFromSupabase(cleanEmail);
+      const supa = await pullUserFromSupabase(cleanEmail, explicitUserId);
       if (supa) {
         if (supa.profile) {
           userData.name = supa.profile.full_name || userData.name;
@@ -546,7 +635,7 @@ app.get('/api/sync/pull', async (req, res) => {
 // 4. Push User Data (Full or Partial Merge to Supabase & Local Cache)
 app.post('/api/sync/push', async (req, res) => {
   try {
-    const { email, name, profile, dailyLogs, weightHistory, measurements, progressPhotos, tier } = req.body;
+    const { email, userId, name, profile, dailyLogs, weightHistory, measurements, progressPhotos, tier } = req.body;
     if (!email) {
       return res.status(400).json({ success: false, message: 'Email required' });
     }
@@ -576,7 +665,7 @@ app.post('/api/sync/push', async (req, res) => {
     saveSyncDatabase(db);
 
     // Asynchronously push to Supabase Postgres database
-    syncUserToSupabase(cleanEmail, existing).catch((err) => {
+    syncUserToSupabase(cleanEmail, existing, userId).catch((err) => {
       console.warn('Background notice pushing to Supabase:', err);
     });
 
@@ -1012,12 +1101,15 @@ const GOOGLE_FIT_SCOPES = [
 
 // 1. Config status and redirect URI for Google Fit OAuth
 app.get('/api/google-fit/config', (req, res) => {
-  const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-  const redirectUri = `${appUrl}/auth/callback`;
+  const origin = (req.query.origin as string) || process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  const redirectUri = `${origin.replace(/\/$/, '')}/auth/callback`;
   const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+  const hasClientSecret = Boolean(process.env.GOOGLE_CLIENT_SECRET);
+  console.log('[Google Fit Server] Config requested. Client ID configured:', Boolean(clientId), 'Secret configured:', hasClientSecret);
   res.json({
     configured: Boolean(clientId),
     clientId,
+    hasClientSecret,
     redirectUri,
     scopes: GOOGLE_FIT_SCOPES,
   });
@@ -1025,11 +1117,13 @@ app.get('/api/google-fit/config', (req, res) => {
 
 // 2. Generate Google OAuth authorization URL
 app.get('/api/google-fit/auth-url', (req, res) => {
-  const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-  const redirectUri = `${appUrl}/auth/callback`;
+  const origin = (req.query.origin as string) || process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  const redirectUri = (req.query.redirectUri as string) || `${origin.replace(/\/$/, '')}/auth/callback`;
   const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+  const hasClientSecret = Boolean(process.env.GOOGLE_CLIENT_SECRET);
 
   if (!clientId) {
+    console.warn('[Google Fit Server] Cannot create auth URL: GOOGLE_CLIENT_ID not found in environment.');
     return res.json({
       configured: false,
       message: 'GOOGLE_CLIENT_ID no configurado en variables de entorno.',
@@ -1037,20 +1131,78 @@ app.get('/api/google-fit/auth-url', (req, res) => {
     });
   }
 
+  // Use code flow if client secret is present, otherwise token flow
+  const responseType = hasClientSecret ? 'code' : 'token';
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
-    response_type: 'token',
+    response_type: responseType,
     scope: GOOGLE_FIT_SCOPES,
     include_granted_scopes: 'true',
     prompt: 'consent',
+    access_type: hasClientSecret ? 'offline' : 'online',
   });
 
   const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  return res.json({ configured: true, authUrl, redirectUri });
+  console.log(`[Google Fit Server] Generated OAuth URL (response_type=${responseType}) for redirect: ${redirectUri}`);
+  return res.json({ configured: true, authUrl, redirectUri, responseType });
 });
 
-// 3. Callback route for Google OAuth popup
+// 3. Exchange authorization code for access_token (Authorization Code flow)
+app.post('/api/google-fit/token-exchange', async (req, res) => {
+  try {
+    const { code, redirectUri } = req.body;
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
+
+    console.log('[Google Fit Server] Exchanging authorization code for access_token...');
+    if (!code) {
+      return res.status(400).json({ success: false, message: 'Código de autorización de Google requerido.' });
+    }
+    if (!clientId || !clientSecret) {
+      console.warn('[Google Fit Server] Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET for code exchange');
+      return res.status(400).json({
+        success: false,
+        message: 'GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET requeridos en variables de entorno para canje de código.',
+      });
+    }
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri || `${process.env.APP_URL || ''}/auth/callback`,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok) {
+      console.error('[Google Fit Server] Token exchange failed with Google OAuth2:', tokenData);
+      return res.status(tokenRes.status).json({
+        success: false,
+        message: tokenData.error_description || tokenData.error || 'Error al intercambiar código con Google',
+        details: tokenData,
+      });
+    }
+
+    console.log('[Google Fit Server] Token exchange successful! Access token granted.');
+    return res.json({
+      success: true,
+      accessToken: tokenData.access_token,
+      expiresIn: tokenData.expires_in || 3600,
+      refreshToken: tokenData.refresh_token,
+    });
+  } catch (err: any) {
+    console.error('[Google Fit Server] Token exchange exception:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error en token exchange' });
+  }
+});
+
+// 4. Callback route for Google OAuth popup
 app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
@@ -1079,6 +1231,7 @@ app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
           const hash = window.location.hash ? window.location.hash.substring(1) : '';
           const hashParams = new URLSearchParams(hash);
           const accessToken = hashParams.get('access_token');
+          const expiresIn = hashParams.get('expires_in');
 
           const queryParams = new URLSearchParams(window.location.search);
           const code = queryParams.get('code');
@@ -1088,13 +1241,14 @@ app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
             type: 'GOOGLE_FIT_AUTH_RESULT',
             success: !error && Boolean(accessToken || code),
             accessToken: accessToken || null,
+            expiresIn: expiresIn ? Number(expiresIn) : 3600,
             code: code || null,
             error: error || null,
           };
 
           if (window.opener) {
             window.opener.postMessage(payload, '*');
-            setTimeout(function() { window.close(); }, 500);
+            setTimeout(function() { window.close(); }, 600);
           } else {
             window.location.href = '/';
           }
@@ -1107,11 +1261,12 @@ app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
 </html>`);
 });
 
-// 4. Fetch real activity from Google Fitness REST API (dataset:aggregate)
+// 5. Fetch real activity from Google Fitness REST API (dataset:aggregate)
 app.post('/api/google-fit/activity', async (req, res) => {
   try {
     const { accessToken, date } = req.body;
     if (!accessToken) {
+      console.warn('[Google Fit Server API] Request missing accessToken.');
       return res.status(400).json({ success: false, message: 'Access token de Google Fit requerido.' });
     }
 
@@ -1121,6 +1276,8 @@ app.post('/api/google-fit/activity', async (req, res) => {
 
     const startTimeMillis = startDate.getTime();
     const endTimeMillis = endDate.getTime();
+
+    console.log(`[Google Fit Server API] Fetching dataset:aggregate for date=${targetDateStr} (${startTimeMillis} - ${endTimeMillis})`);
 
     // Call Google Fitness REST API aggregate endpoint
     const fitnessResponse = await fetch('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
@@ -1142,10 +1299,19 @@ app.post('/api/google-fit/activity', async (req, res) => {
 
     if (!fitnessResponse.ok) {
       const errText = await fitnessResponse.text();
-      console.warn('[Google Fit API Error]:', fitnessResponse.status, errText);
+      console.error(`[Google Fit Server API Error] HTTP ${fitnessResponse.status}:`, errText);
+
+      let userFriendlyMessage = `Error en Google Fitness API (${fitnessResponse.status})`;
+      if (fitnessResponse.status === 401) {
+        userFriendlyMessage = 'El token de Google Fit ha expirado o es inválido. Por favor vuelve a conectar.';
+      } else if (fitnessResponse.status === 403) {
+        userFriendlyMessage = 'Permisos insuficientes en Google Fit. Asegúrate de autorizar lectura de actividad física y cuerpo.';
+      }
+
       return res.status(fitnessResponse.status).json({
         success: false,
-        message: `Error en Google Fitness API (${fitnessResponse.status})`,
+        status: fitnessResponse.status,
+        message: userFriendlyMessage,
         details: errText,
       });
     }
@@ -1174,6 +1340,8 @@ app.post('/api/google-fit/activity', async (req, res) => {
       }
     }
 
+    console.log(`[Google Fit Server API] Success for ${targetDateStr}: ${totalSteps} steps, ${totalCalories} active kcal`);
+
     return res.json({
       success: true,
       date: targetDateStr,
@@ -1183,7 +1351,7 @@ app.post('/api/google-fit/activity', async (req, res) => {
       syncedAt: new Date().toISOString(),
     });
   } catch (err: any) {
-    console.error('[Google Fit Handler Error]:', err);
+    console.error('[Google Fit Server API] Unexpected handler error:', err);
     return res.status(500).json({ success: false, message: err.message || 'Error al conectar con Google Fit' });
   }
 });

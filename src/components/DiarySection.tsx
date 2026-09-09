@@ -22,7 +22,7 @@ import {
 import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
 import { getProfileCalculations } from '../utils/nutritionCalculations';
 import { WaterTrackerCard } from './WaterTrackerCard';
-import { hasUserProAccess } from '../utils/storage';
+import { hasUserProAccess, FOUNDER_EMAIL } from '../utils/storage';
 import { AddArgentineFoodModal } from './AddArgentineFoodModal';
 
 interface DiarySectionProps {
@@ -163,55 +163,63 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
     { type: 'snacks', label: 'Snacks & Merienda', icon: Apple, color: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-300' },
   ];
 
+  const isFounder = userEmail.trim().toLowerCase() === FOUNDER_EMAIL.toLowerCase() || Boolean(profile.name && profile.name.toLowerCase().includes('david'));
+
   return (
     <div className="space-y-6 pb-12" id="diary-screen">
-      {/* Date Navigator & Profile quick status */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
-        <div className="flex items-center gap-2">
+      {/* Date Navigator & Action Bar */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 sm:gap-4 bg-white dark:bg-zinc-900 p-3.5 sm:p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+        {/* Selector de fecha */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
+            type="button"
             onClick={handlePrevDay}
             title="Día anterior"
-            className="p-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+            className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 transition-colors shrink-0 active:scale-95"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800/60 rounded-xl border border-zinc-200 dark:border-zinc-700">
-            <CalendarIcon className="w-4 h-4 text-emerald-600" />
-            <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+          <div className="flex items-center gap-1.5 sm:gap-2 px-3 py-2 bg-zinc-50 dark:bg-zinc-800/60 rounded-xl border border-zinc-200 dark:border-zinc-700 whitespace-nowrap leading-none">
+            <CalendarIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="text-xs sm:text-sm font-bold text-zinc-900 dark:text-zinc-100 leading-none whitespace-nowrap">
               {isToday ? 'Hoy' : selectedDate}
             </span>
-            <span className="text-xs text-zinc-400">({selectedDate})</span>
+            <span className="text-[11px] sm:text-xs text-zinc-400 dark:text-zinc-400 leading-none whitespace-nowrap">
+              ({selectedDate})
+            </span>
           </div>
 
           <button
+            type="button"
             onClick={handleNextDay}
             title="Día siguiente"
-            className="p-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+            className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 transition-colors shrink-0 active:scale-95"
           >
             <ChevronRight className="w-5 h-5" />
           </button>
 
           {!isToday && (
             <button
+              type="button"
               onClick={() => onSelectDate(new Date().toISOString().split('T')[0])}
-              className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2 py-1"
+              className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2 py-1 whitespace-nowrap"
             >
               Volver a hoy
             </button>
           )}
         </div>
 
-        {/* Actions: Escanear con Cámara, Base AR, Actividad & Profile Objective Pill */}
+        {/* Barra de acciones: Alimentos AR, Actividad, Escanear IA, Perfil Fundador */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             id="diary-btn-open-argentine-food"
             onClick={() => setActiveModalMeal('lunch')}
-            className="px-3 py-1.5 bg-zinc-100 hover:bg-emerald-50 dark:bg-zinc-800 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-200/60 dark:border-emerald-800/60 shadow-xs transition-all hover:scale-[1.02]"
+            className="h-9 px-3 bg-zinc-100 hover:bg-emerald-50 dark:bg-zinc-800 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-200/60 dark:border-emerald-800/60 shadow-xs transition-all hover:scale-[1.02] whitespace-nowrap"
             title="Buscar alimentos argentinos por porción o gramos"
           >
-            <Utensils className="w-3.5 h-3.5 text-emerald-600" />
+            <Utensils className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
             <span>Alimentos AR</span>
           </button>
 
@@ -220,14 +228,14 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
               type="button"
               id="diary-btn-open-activity"
               onClick={onNavigateToActivity}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border shadow-xs transition-all hover:scale-[1.02] ${
+              className={`h-9 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 border shadow-xs transition-all hover:scale-[1.02] whitespace-nowrap ${
                 activeBurn > 0
                   ? 'bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800'
                   : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
               }`}
               title="Registrar o sincronizar actividad física"
             >
-              <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
+              <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500 shrink-0" />
               <span>{activeBurn > 0 ? `-${activeBurn} kcal act.` : 'Actividad'}</span>
             </button>
           )}
@@ -236,25 +244,34 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             type="button"
             id="diary-btn-open-scanner"
             onClick={onNavigateToScanner}
-            className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 transition-all hover:scale-[1.02]"
+            className="h-9 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 transition-all hover:scale-[1.02] whitespace-nowrap"
             title="Escanear con Cámara Inteligente (95%+ Precisión)"
           >
-            <Camera className="w-3.5 h-3.5" />
+            <Camera className="w-3.5 h-3.5 shrink-0" />
             <span>Escanear IA</span>
           </button>
 
-          <div className="flex items-center gap-1.5 text-xs">
-            <button
-              onClick={onOpenProfile}
-              className="font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800/80 px-2.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 hover:border-emerald-500 flex items-center gap-1.5 transition-all"
-            >
-              <span>{profile.name || 'Mi Perfil'}</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 font-extrabold">
-                {profile.goal === 'deficit' ? 'Déficit' : profile.goal === 'surplus' ? 'Superávit' : 'Mantenimiento'}
+          {/* Pill/badge David Desalvo (Fundador) Déficit */}
+          <button
+            type="button"
+            id="diary-btn-profile-badge"
+            onClick={onOpenProfile}
+            className="h-9 font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800/80 px-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700 hover:border-emerald-500 flex items-center gap-1.5 transition-all text-xs whitespace-nowrap shrink-0"
+            title="Ver o editar perfil y metas nutricionales"
+          >
+            <span className="font-bold text-zinc-800 dark:text-zinc-200">
+              {isFounder ? 'David Desalvo' : (profile.name || 'Mi Perfil')}
+            </span>
+            {isFounder && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border border-amber-300/60 dark:border-amber-700/60 leading-none">
+                Fundador
               </span>
-              <Edit3 className="w-3 h-3 text-zinc-400" />
-            </button>
-          </div>
+            )}
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 font-extrabold leading-none">
+              {profile.goal === 'deficit' ? 'Déficit' : profile.goal === 'surplus' ? 'Superávit' : 'Mantenimiento'}
+            </span>
+            <Edit3 className="w-3 h-3 text-zinc-400 shrink-0" />
+          </button>
         </div>
       </div>
 
