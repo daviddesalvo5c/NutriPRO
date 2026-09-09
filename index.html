@@ -2,6 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Suppress harmless Vite dev server websocket messages in sandboxed preview iframe
+      (function() {
+        var origError = console.error;
+        console.error = function() {
+          if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].indexOf('[vite]') !== -1) {
+            return;
+          }
+          origError.apply(console, arguments);
+        };
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Calculadora Nutricional y Perfil de Usuario</title>
     <meta name="description" content="Diario y escáner nutricional inteligente con IA y 95%+ de precisión, base de datos de alimentos argentinos por porción o gramos, cálculo de macros y planes de suscripción Mercado Pago." />
