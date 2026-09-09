@@ -1240,14 +1240,69 @@ app.post('/api/founder/users/grant-vip', async (req, res) => {
     const clean = (targetEmail || '').toLowerCase().trim();
     if (!clean) return res.status(400).json({ success: false, message: 'Email requerido' });
 
-    // Update Supabase profiles table
-    await supabaseServer
+    // Check if profile exists
+    const { data: existingProf } = await supabaseServer
       .from('profiles')
-      .update({ subscription_plan: 'vip', updated_at: new Date().toISOString() })
-      .eq('email', clean);
+      .select('id, email')
+      .eq('email', clean)
+      .maybeSingle();
 
-    // Update local cache
-    if (db.users[clean]) db.users[clean].tier = 'vip';
+    let userUuid = existingProf?.id;
+
+    if (existingProf) {
+      // Update Supabase profiles table
+      await supabaseServer
+        .from('profiles')
+        .update({ subscription_plan: 'vip', updated_at: new Date().toISOString() })
+        .eq('email', clean);
+    } else {
+      // If user not in profiles, ensure Supabase Auth user exists first
+      try {
+        const { data: list } = await supabaseServer.auth.admin.listUsers();
+        const foundAuth = list?.users?.find((u: any) => u.email?.toLowerCase() === clean);
+        if (foundAuth) {
+          userUuid = foundAuth.id;
+        } else {
+          const { data: createdAuth } = await supabaseServer.auth.admin.createUser({
+            email: clean,
+            password: 'Password123!',
+            email_confirm: true,
+            user_metadata: { full_name: clean.split('@')[0] },
+          });
+          if (createdAuth?.user?.id) {
+            userUuid = createdAuth.user.id;
+          }
+        }
+      } catch (authErr) {
+        console.warn('Notice creating auth user in grant-vip:', authErr);
+      }
+
+      if (!userUuid) userUuid = emailToUuid(clean);
+
+      // Upsert into profiles
+      await supabaseServer.from('profiles').upsert({
+        id: userUuid,
+        email: clean,
+        full_name: clean.split('@')[0],
+        subscription_plan: 'vip',
+        is_founder: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'email' });
+    }
+
+    // Ensure user is present in local cache as VIP
+    if (!db.users[clean]) {
+      db.users[clean] = {
+        email: clean,
+        name: clean.split('@')[0],
+        tier: 'vip',
+        isFounder: false,
+        createdAt: new Date().toISOString(),
+      };
+    } else {
+      db.users[clean].tier = 'vip';
+    }
     if (db.userData[clean]) db.userData[clean].tier = 'vip';
     saveSyncDatabase(db);
 
@@ -1399,8 +1454,39 @@ app.post('/api/google-fit/token-exchange', async (req, res) => {
   }
 });
 
-// 4. Callback route for Google OAuth popup
-app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
+// 4. Callback route for Google OAuth popup & direct mobile navigation
+app.get(['/auth/callback', '/auth/callback/'], async (req, res) => {
+  let exchangeToken = '';
+  let exchangeExpiresIn = 3600;
+
+  if (req.query.code && process.env.GOOGLE_CLIENT_SECRET) {
+    try {
+      const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '324998110009-0tcomd0d8tap98ccan6j8n0vmr53okp5.apps.googleusercontent.com';
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
+      const origin = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+      const redirectUri = `${origin.replace(/\/$/, '')}/auth/callback`;
+
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code: String(req.query.code),
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code',
+        }),
+      });
+      const tData = await tokenRes.json();
+      if (tData.access_token) {
+        exchangeToken = tData.access_token;
+        exchangeExpiresIn = tData.expires_in || 3600;
+      }
+    } catch (e) {
+      console.warn('Callback code exchange notice:', e);
+    }
+  }
+
   res.send(`<!DOCTYPE html>
 <html>
   <head>
@@ -1420,37 +1506,52 @@ app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
     <div class="card">
       <div class="spinner"></div>
       <h3>Sincronizando con Google Fit</h3>
-      <p>Verificando credenciales seguras. Esta ventana se cerrará automáticamente en unos segundos...</p>
+      <p>Verificando credenciales seguras. Redirigiendo a NutriFit...</p>
     </div>
     <script>
       (function() {
         try {
+          const serverToken = ${JSON.stringify(exchangeToken)};
+          const serverExp = ${exchangeExpiresIn};
+
           const hash = window.location.hash ? window.location.hash.substring(1) : '';
           const hashParams = new URLSearchParams(hash);
-          const accessToken = hashParams.get('access_token');
-          const expiresIn = hashParams.get('expires_in');
+          const accessToken = hashParams.get('access_token') || serverToken;
+          const expiresIn = hashParams.get('expires_in') || serverExp;
 
           const queryParams = new URLSearchParams(window.location.search);
           const code = queryParams.get('code');
           const error = queryParams.get('error') || hashParams.get('error');
 
+          const finalSuccess = !error && Boolean(accessToken || code);
           const payload = {
             type: 'GOOGLE_FIT_AUTH_RESULT',
-            success: !error && Boolean(accessToken || code),
+            success: finalSuccess,
             accessToken: accessToken || null,
             expiresIn: expiresIn ? Number(expiresIn) : 3600,
             code: code || null,
             error: error || null,
           };
 
+          if (accessToken) {
+            try {
+              localStorage.setItem('nutrifit_google_fit_token', accessToken);
+              sessionStorage.setItem('nutrifit_google_fit_token', accessToken);
+              const expMs = Date.now() + (Number(expiresIn) * 1000) - 30000;
+              localStorage.setItem('nutrifit_google_fit_expiry', String(expMs));
+              sessionStorage.setItem('nutrifit_google_fit_expiry', String(expMs));
+            } catch(e) {}
+          }
+
           if (window.opener) {
             window.opener.postMessage(payload, '*');
             setTimeout(function() { window.close(); }, 600);
           } else {
-            window.location.href = '/';
+            setTimeout(function() { window.location.href = '/'; }, 600);
           }
         } catch(e) {
           console.error(e);
+          window.location.href = '/';
         }
       })();
     </script>

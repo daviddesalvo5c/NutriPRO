@@ -88,15 +88,27 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
 
   // Check stored token status on mount and date change, auto-fetching if connected
   useEffect(() => {
+    const isPending = sessionStorage.getItem('nutrifit_google_fit_auth_pending');
+    if (isPending) {
+      sessionStorage.removeItem('nutrifit_google_fit_auth_pending');
+    }
+
     const token = getStoredGoogleFitToken();
     const hasValidToken = Boolean(token);
     setHasStoredToken(hasValidToken);
 
-    if (token && currentDayLog.connectedService !== 'google_fit') {
-      onUpdateSyncData(selectedDate, 'google_fit', currentDayLog.syncedSteps || 0, currentDayLog.syncedCalories || 0);
+    if (token) {
+      if (currentDayLog.connectedService !== 'google_fit') {
+        onUpdateSyncData(selectedDate, 'google_fit', currentDayLog.syncedSteps || 0, currentDayLog.syncedCalories || 0);
+      }
       fetchGoogleFitActivity(selectedDate, token)
         .then((res) => {
           onUpdateSyncData(selectedDate, 'google_fit', res.steps, res.calories);
+          if (isPending) {
+            notificationService.notifySuccess(
+              `¡Google Fit conectado exitosamente! Sincronizados ${res.steps.toLocaleString()} pasos y ${res.calories} kcal activas.`
+            );
+          }
         })
         .catch((err) => {
           console.warn('[ActivitySection] Auto-fetch error:', err);

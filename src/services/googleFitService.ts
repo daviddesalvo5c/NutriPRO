@@ -18,6 +18,10 @@ export interface GoogleFitSyncResult {
   error?: string;
 }
 
+export const FALLBACK_GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  '324998110009-0tcomd0d8tap98ccan6j8n0vmr53okp5.apps.googleusercontent.com';
+
 export interface GoogleFitConfig {
   configured: boolean;
   clientId: string;
@@ -31,22 +35,31 @@ export interface GoogleFitConfig {
  */
 export async function getGoogleFitConfig(): Promise<GoogleFitConfig> {
   const appOrigin = window.location.origin;
+  const fallbackId = FALLBACK_GOOGLE_CLIENT_ID;
   try {
     const res = await fetch(`/api/google-fit/config?origin=${encodeURIComponent(appOrigin)}`);
     if (res.ok) {
       const data = await res.json();
-      console.log('[GoogleFit Client] Backend config loaded:', data);
-      return data;
+      if (data && typeof data === 'object') {
+        console.log('[GoogleFit Client] Backend config loaded:', data);
+        return {
+          configured: true,
+          clientId: data.clientId || fallbackId,
+          hasClientSecret: Boolean(data.hasClientSecret),
+          redirectUri: data.redirectUri || `${appOrigin}/auth/callback`,
+          scopes: data.scopes || 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/fitness.body.read https://www.googleapis.com/auth/userinfo.profile',
+        };
+      }
     }
   } catch (err) {
-    console.warn('[GoogleFit Client] Failed loading Google Fit config from backend:', err);
+    console.warn('[GoogleFit Client] Notice loading Google Fit config from backend:', err);
   }
 
   return {
-    configured: Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID),
-    clientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
+    configured: true,
+    clientId: fallbackId,
     redirectUri: `${appOrigin}/auth/callback`,
-    scopes: 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/fitness.body.read',
+    scopes: 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/fitness.body.read https://www.googleapis.com/auth/userinfo.profile',
   };
 }
 
@@ -146,41 +159,44 @@ function launchOAuthPopup(
   config: GoogleFitConfig,
   resolve: (val: { success: boolean; accessToken?: string; message?: string }) => void
 ) {
-  if (!config.configured && !config.clientId) {
-    console.warn('[GoogleFit Client] No GOOGLE_CLIENT_ID configured.');
-    resolve({
-      success: false,
-      message: 'GOOGLE_CLIENT_ID no configurado. Se requiere un Client ID de Google Cloud Console con la API Google Fitness activada.',
-    });
-    return;
-  }
-
-  const clientId = config.clientId;
+  const clientId = config.clientId || FALLBACK_GOOGLE_CLIENT_ID;
   const redirectUri = encodeURIComponent(config.redirectUri);
   const scopes = encodeURIComponent(config.scopes);
   const responseType = config.hasClientSecret ? 'code' : 'token';
 
   const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=${responseType}&scope=${scopes}&include_granted_scopes=true&prompt=consent`;
 
-  console.log(`[GoogleFit Client] Opening popup for URL (response_type=${responseType})...`);
+  console.log(`[GoogleFit Client] Launching OAuth flow (response_type=${responseType})...`);
+
+  // On mobile devices or standalone PWAs, popup windows are blocked or render poorly. Direct redirect provides a native experience.
+  const isMobile = window.innerWidth < 768 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  if (isMobile) {
+    console.log('[GoogleFit Client] Mobile device detected, navigating directly to Google Fit OAuth...');
+    sessionStorage.setItem('nutrifit_google_fit_auth_pending', 'true');
+    window.location.href = authUrl;
+    return;
+  }
 
   const width = 540;
   const height = 660;
   const left = window.screenX + (window.outerWidth - width) / 2;
   const top = window.screenY + (window.outerHeight - height) / 2;
 
-  const popup = window.open(
-    authUrl,
-    'google_fit_oauth_popup',
-    `width=${width},height=${height},left=${left},top=${top},status=no,toolbar=no,menubar=no`
-  );
+  let popup: Window | null = null;
+  try {
+    popup = window.open(
+      authUrl,
+      'google_fit_oauth_popup',
+      `width=${width},height=${height},left=${left},top=${top},status=no,toolbar=no,menubar=no`
+    );
+  } catch (openErr) {
+    console.warn('[GoogleFit Client] window.open failed:', openErr);
+  }
 
   if (!popup) {
-    console.error('[GoogleFit Client] Popup was blocked by the browser.');
-    resolve({
-      success: false,
-      message: 'El navegador bloqueó la ventana emergente. Por favor permite popups para conectar Google Fit.',
-    });
+    console.log('[GoogleFit Client] Popup blocked or not supported, redirecting in tab...');
+    sessionStorage.setItem('nutrifit_google_fit_auth_pending', 'true');
+    window.location.href = authUrl;
     return;
   }
 
