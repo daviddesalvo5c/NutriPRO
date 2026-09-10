@@ -36,6 +36,7 @@ import {
 } from '../services/barcodeService';
 import { formatGrams, roundGrams } from '../utils/nutritionCalculations';
 import { ARGENTINE_FOOD_DATABASE } from '../data/argentineFoodDatabase';
+import { saveFoodToUserLibrary } from '../utils/userFoodsStorage';
 
 interface ScannerSectionProps {
   onAddFoodToDiary: (item: Omit<FoodItem, 'id'>, mealType: MealType) => void;
@@ -392,6 +393,22 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
+    // Auto-register into user's saved foods library so it can be repeated or edited anytime
+    saveFoodToUserLibrary(
+      {
+        name: `${packageResult.productName} (${packageResult.brand})`,
+        category: 'Código de barras',
+        amountGrams: roundGrams(calc.totalGrams),
+        portionDescription: `${calc.unitCount} ${calc.unitName} (${formatGrams(calc.totalGrams)}g)`,
+        calories: calc.calories,
+        proteinGrams: calc.proteinGrams,
+        carbsGrams: calc.carbsGrams,
+        fatGrams: calc.fatGrams,
+        source: 'barcode',
+      },
+      userEmail
+    );
+
     onAddFoodToDiary(foodItem, selectedMeal);
     onNavigateToDiary();
   };
@@ -489,6 +506,33 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       mealType: selectedMeal,
       timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
+
+    // Auto-save the whole scanned dish and its individual ingredients (e.g. bife, pastas) to the user's permanent library
+    const numIngredients = result.ingredients && result.ingredients.length > 0 ? result.ingredients.length : 1;
+    const components = result.ingredients?.map((ing) => ({
+      name: ing.name,
+      amountGrams: Math.round(scaledWeight / numIngredients),
+      calories: Math.round(scaledCalories / numIngredients),
+      proteinGrams: roundGrams(scaledProtein / numIngredients),
+      carbsGrams: roundGrams(scaledCarbs / numIngredients),
+      fatGrams: roundGrams(scaledFat / numIngredients),
+    })) || [];
+
+    saveFoodToUserLibrary(
+      {
+        name: editableDishName.trim() || result.name,
+        category: result.category || 'Escáner IA',
+        amountGrams: scaledWeight,
+        portionDescription: `Escáner IA (${formatGrams(scaledWeight)}g)`,
+        calories: scaledCalories,
+        proteinGrams: scaledProtein,
+        carbsGrams: scaledCarbs,
+        fatGrams: scaledFat,
+        components,
+        source: 'ai_scan',
+      },
+      userEmail
+    );
 
     onAddFoodToDiary(foodItem, selectedMeal);
     onNavigateToDiary();

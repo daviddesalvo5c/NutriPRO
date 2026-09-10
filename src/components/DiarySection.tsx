@@ -22,8 +22,9 @@ import {
 import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
 import { getProfileCalculations, formatGrams, roundGrams } from '../utils/nutritionCalculations';
 import { WaterTrackerCard } from './WaterTrackerCard';
-import { hasUserProAccess, FOUNDER_EMAIL } from '../utils/storage';
+import { hasUserProAccess, FOUNDER_EMAIL, FOUNDER_NAME } from '../utils/storage';
 import { AddArgentineFoodModal } from './AddArgentineFoodModal';
+import { EditFoodItemModal } from './EditFoodItemModal';
 
 interface DiarySectionProps {
   profile: UserProfile;
@@ -42,6 +43,7 @@ interface DiarySectionProps {
   userEmail?: string;
   currentTier?: SubscriptionTier;
   onOpenPlansModal?: () => void;
+  onEditFoodItem?: (date: string, item: FoodItem) => void;
 }
 
 export const DiarySection: React.FC<DiarySectionProps> = ({
@@ -61,8 +63,10 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   userEmail = '',
   currentTier = 'free' as SubscriptionTier,
   onOpenPlansModal,
+  onEditFoodItem,
 }) => {
   const [activeModalMeal, setActiveModalMeal] = useState<MealType | null>(null);
+  const [editingItem, setEditingItem] = useState<FoodItem | null>(null);
 
   // Check 7-day history limit for Free users
   const isDateOlderThan7Days = (dateStr: string) => {
@@ -165,7 +169,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
     { type: 'snacks', label: 'Snacks & Merienda', icon: Apple, color: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-300' },
   ];
 
-  const isFounder = userEmail.trim().toLowerCase() === FOUNDER_EMAIL.toLowerCase() || Boolean(profile.name && profile.name.toLowerCase().includes('david'));
+  const isFounder = userEmail.trim().toLowerCase() === FOUNDER_EMAIL.toLowerCase();
 
   return (
     <div className="space-y-6 pb-12" id="diary-screen">
@@ -280,7 +284,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             title="Ver o editar perfil y metas nutricionales"
           >
             <span className="font-bold text-zinc-800 dark:text-zinc-200">
-              {isFounder ? 'David Desalvo' : (profile.name || 'Mi Perfil')}
+              {isFounder ? FOUNDER_NAME : (profile.name || userEmail.split('@')[0] || 'Mi Perfil')}
             </span>
             {isFounder && (
               <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border border-amber-300/60 dark:border-amber-700/60 leading-none">
@@ -591,18 +595,26 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                   {mealItems.map((item) => (
                     <div
                       key={item.id}
-                      className="p-3.5 px-4 flex items-center justify-between hover:bg-zinc-50/70 dark:hover:bg-zinc-800/30 transition-colors group"
+                      className="p-3.5 px-4 flex items-center justify-between hover:bg-zinc-50/70 dark:hover:bg-zinc-800/30 transition-colors group cursor-pointer"
+                      onClick={() => setEditingItem(item)}
+                      title="Haz clic para editar porción, gramos o macros"
                     >
-                      <div className="pr-3">
-                        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 block">
-                          {item.name}
-                        </span>
-                        <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <div className="pr-3 flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate hover:text-emerald-600 transition-colors">
+                            {item.name}
+                          </span>
+                          <span className="text-[10px] text-zinc-400 group-hover:text-emerald-500 opacity-70 group-hover:opacity-100 flex items-center gap-0.5">
+                            <Edit3 className="w-3 h-3" />
+                            <span className="hidden sm:inline">Editar</span>
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-zinc-500 dark:text-zinc-400 block truncate">
                           {item.portionDescription} {item.timeAdded ? `· ${item.timeAdded}` : ''}
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex items-center gap-2.5 sm:gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-1.5 text-[10px] font-bold hidden sm:flex">
                           <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50 dark:border-indigo-800/50">
                             {formatGrams(item.proteinGrams)}g P
@@ -623,6 +635,40 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                             {formatGrams(item.proteinGrams)}P · {formatGrams(item.carbsGrams)}C · {formatGrams(item.fatGrams)}G
                           </span>
                         </div>
+
+                        {/* Edit Button */}
+                        <button
+                          type="button"
+                          onClick={() => setEditingItem(item)}
+                          title="Editar alimento, cambiar gramos o añadir otra porción"
+                          className="text-zinc-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Quick Duplicate "+1" Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const duplicateItem: Omit<FoodItem, 'id'> = {
+                              name: item.name,
+                              mealType: item.mealType,
+                              amountGrams: item.amountGrams,
+                              portionDescription: item.portionDescription,
+                              calories: item.calories,
+                              proteinGrams: item.proteinGrams,
+                              carbsGrams: item.carbsGrams,
+                              fatGrams: item.fatGrams,
+                              timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                            };
+                            onAddFoodItem(selectedDate, duplicateItem);
+                          }}
+                          title="Sumar otra porción igual (+1)"
+                          className="text-zinc-400 hover:text-emerald-600 px-1.5 py-1 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-[11px] font-bold border border-zinc-200 dark:border-zinc-700 transition-colors flex items-center gap-0.5"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span className="text-[10px]">1</span>
+                        </button>
 
                         <button
                           type="button"
@@ -694,6 +740,30 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             onAddFoodItem(selectedDate, item);
             setActiveModalMeal(null);
           }}
+          userEmail={userEmail}
+        />
+      )}
+
+      {/* Edit Food Item Modal */}
+      {editingItem && (
+        <EditFoodItemModal
+          isOpen={Boolean(editingItem)}
+          onClose={() => setEditingItem(null)}
+          item={editingItem}
+          date={selectedDate}
+          onSave={(date, updated) => {
+            if (onEditFoodItem) {
+              onEditFoodItem(date, updated);
+            }
+            setEditingItem(null);
+          }}
+          onDuplicate={(date, duplicate) => {
+            onAddFoodItem(date, duplicate);
+          }}
+          onDelete={(date, itemId) => {
+            onRemoveFoodItem(date, itemId);
+          }}
+          userEmail={userEmail}
         />
       )}
     </div>

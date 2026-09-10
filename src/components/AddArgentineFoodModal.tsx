@@ -22,12 +22,14 @@ import {
   calculateArgentineFoodNutrition, 
   searchArgentineFoods 
 } from '../data/argentineFoodDatabase';
+import { loadUserSavedFoods, UserSavedFood } from '../utils/userFoodsStorage';
 
 interface AddArgentineFoodModalProps {
   isOpen: boolean;
   onClose: () => void;
   mealType: MealType;
   onSaveFoodItem: (item: Omit<FoodItem, 'id'>) => void;
+  userEmail?: string;
 }
 
 export const AddArgentineFoodModal: React.FC<AddArgentineFoodModalProps> = ({
@@ -35,6 +37,7 @@ export const AddArgentineFoodModal: React.FC<AddArgentineFoodModalProps> = ({
   onClose,
   mealType,
   onSaveFoodItem,
+  userEmail = '',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -61,9 +64,32 @@ export const AddArgentineFoodModal: React.FC<AddArgentineFoodModalProps> = ({
     snacks: { title: 'Snacks / Colaciones', emoji: '🍎' },
   };
 
+  const userSavedFoods = useMemo(() => {
+    return loadUserSavedFoods(userEmail);
+  }, [userEmail, isOpen]);
+
+  const convertedSavedFoods: ArgentineFood[] = useMemo(() => {
+    return userSavedFoods.map((s) => ({
+      id: s.id,
+      name: `📸 ${s.name}`,
+      category: 'Comidas Típicas Argentinas' as ArgentineCategory,
+      unitName: 'porción',
+      gramsPerUnit: s.amountGrams,
+      defaultUnitCount: 1,
+      per100g: s.per100g || {
+        calories: Math.round((s.calories / Math.max(1, s.amountGrams)) * 100),
+        protein: Number(((s.proteinGrams / Math.max(1, s.amountGrams)) * 100).toFixed(1)),
+        carbs: Number(((s.carbsGrams / Math.max(1, s.amountGrams)) * 100).toFixed(1)),
+        fat: Number(((s.fatGrams / Math.max(1, s.amountGrams)) * 100).toFixed(1)),
+      },
+      popular: true,
+    }));
+  }, [userSavedFoods]);
+
   // Categories list
-  const categories: { key: string; label: string }[] = [
+  const categories: { key: string; label: string }[] = useMemo(() => [
     { key: 'all', label: 'Todos' },
+    ...(userSavedFoods.length > 0 ? [{ key: 'scanned', label: `📸 Mis Escaneos (${userSavedFoods.length})` }] : []),
     { key: 'Huevos y Desayuno', label: '🍳 Huevos y Desayuno' },
     { key: 'Infusiones y Bebidas', label: '☕ Infusiones y Bebidas' },
     { key: 'Carnes y Asado', label: '🥩 Carnes y Asado' },
@@ -74,12 +100,22 @@ export const AddArgentineFoodModal: React.FC<AddArgentineFoodModalProps> = ({
     { key: 'Comidas Típicas Argentinas', label: '🥟 Comidas Típicas' },
     { key: 'Frutas', label: '🍌 Frutas' },
     { key: 'Snacks y Suplementos', label: '⚡ Suplementos' },
-  ];
+  ], [userSavedFoods.length]);
 
   // Filtered food list
   const filteredFoods = useMemo(() => {
-    return searchArgentineFoods(searchQuery, selectedCategory);
-  }, [searchQuery, selectedCategory]);
+    const q = searchQuery.toLowerCase().trim();
+    if (selectedCategory === 'scanned') {
+      if (!q) return convertedSavedFoods;
+      return convertedSavedFoods.filter((f) => f.name.toLowerCase().includes(q));
+    }
+    const standard = searchArgentineFoods(searchQuery, selectedCategory);
+    if (selectedCategory === 'all') {
+      const matchedSaved = convertedSavedFoods.filter((f) => !q || f.name.toLowerCase().includes(q));
+      return [...matchedSaved, ...standard];
+    }
+    return standard;
+  }, [searchQuery, selectedCategory, convertedSavedFoods]);
 
   // When selecting a food item
   const handleSelectFood = (food: ArgentineFood) => {
@@ -113,8 +149,9 @@ export const AddArgentineFoodModal: React.FC<AddArgentineFoodModalProps> = ({
   const handleAddCalculatedFood = () => {
     if (!selectedFood || !currentNutrition) return;
 
+    const cleanName = selectedFood.name.replace(/^📸\s*/, '');
     onSaveFoodItem({
-      name: selectedFood.name,
+      name: cleanName,
       portionDescription: currentNutrition.portionDescription,
       amountGrams: currentNutrition.amountGrams,
       calories: currentNutrition.calories,

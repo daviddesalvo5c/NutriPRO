@@ -592,6 +592,42 @@ export default function App() {
     }
   };
 
+  // Edit food item in a date log
+  const handleEditFoodItem = (date: string, updatedItem: FoodItem) => {
+    if (!session) return;
+    setDailyLogs((prev) => {
+      const existingLog = prev[date];
+      if (!existingLog) return prev;
+      const updatedLogs: Record<string, DailyLog> = {
+        ...prev,
+        [date]: {
+          ...existingLog,
+          items: existingLog.items.map((i) => (i.id === updatedItem.id ? updatedItem : i)),
+        },
+      };
+      saveDailyLogsForUser(session.email, updatedLogs);
+      return updatedLogs;
+    });
+
+    // Sync to Cloud
+    cloudSyncService.pushUserData({
+      email: session.email,
+      dailyLogs: {
+        [date]: {
+          date,
+          items: [updatedItem],
+        },
+      },
+      userId: session.userId,
+    }).catch(() => {});
+
+    if (isSupabaseConfigured) {
+      supabaseAddFoodItem(session.email, date, updatedItem, session.userId).catch((err) =>
+        console.warn('Supabase edit food notice:', err)
+      );
+    }
+  };
+
   // Update daily water hydration
   const handleUpdateWater = (date: string, amountMl: number) => {
     if (!session) return;
@@ -869,6 +905,7 @@ export default function App() {
             onSelectDate={setSelectedDate}
             onAddFoodItem={handleAddFoodItem}
             onRemoveFoodItem={handleRemoveFoodItem}
+            onEditFoodItem={handleEditFoodItem}
             onUpdateWater={handleUpdateWater}
             onToggleCloseDay={handleToggleCloseDay}
             onOpenProfile={() => setActiveTab('profile')}
@@ -884,6 +921,7 @@ export default function App() {
 
         {activeTab === 'foods' && (
           <FoodsSection
+            userEmail={session.email}
             onAddFoodToDiary={(item, mealType) => {
               handleAddFoodItem(selectedDate, { ...item, mealType });
               setActiveTab('diary');
