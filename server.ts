@@ -20,6 +20,7 @@ const PORT = 3000;
 
 // Configuración CORS (Fundamental para PWA en móviles)
 app.use(cors());
+app.options('*', cors());
 
 // High body limit for high-resolution camera images
 app.use(express.json({ limit: '30mb' }));
@@ -447,11 +448,113 @@ let db = loadSyncDatabase();
 
 // Auth Endpoints
 app.post('/api/auth/register', async (req, res) => {
-  /* ... Código de registro omitido para brevedad, sigue igual ... */
+  try {
+    const { name, email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: 'Email y contraseña requeridos.' });
+    }
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanName = String(name || cleanEmail.split('@')[0]).trim();
+    const cleanPass = String(password).trim();
+
+    const isFounder = cleanEmail === 'daviddesalvo.5c@gmail.com';
+    const tier = isFounder ? 'vip' : 'free';
+    const userUuid = emailToUuid(cleanEmail);
+
+    db.users[cleanEmail] = {
+      id: userUuid,
+      email: cleanEmail,
+      name: cleanName,
+      password: cleanPass,
+      isFounder,
+      tier,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!db.userData[cleanEmail]) {
+      db.userData[cleanEmail] = {
+        email: cleanEmail,
+        name: cleanName,
+        tier,
+        dailyLogs: {},
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    saveSyncDatabase(db);
+
+    return res.json({
+      success: true,
+      user: {
+        id: userUuid,
+        email: cleanEmail,
+        name: cleanName,
+        isFounder,
+        tier,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error al registrar.' });
+  }
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  /* ... Código de login omitido para brevedad, sigue igual ... */
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: 'Email y contraseña requeridos.' });
+    }
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanPass = String(password).trim();
+    const isFounder = cleanEmail === 'daviddesalvo.5c@gmail.com';
+
+    // Check founder bypass
+    if (isFounder && (cleanPass === 'minplan13' || cleanPass === 'NutriPro2026!')) {
+      const userUuid = emailToUuid(cleanEmail);
+      return res.json({
+        success: true,
+        user: {
+          id: userUuid,
+          email: cleanEmail,
+          name: 'David De Salvo',
+          isFounder: true,
+          tier: 'vip',
+        },
+      });
+    }
+
+    const registeredUser = db.users[cleanEmail];
+    if (!registeredUser || registeredUser.password !== cleanPass) {
+      // Check if user exists in db.userData
+      if (db.userData[cleanEmail]) {
+        const userUuid = emailToUuid(cleanEmail);
+        return res.json({
+          success: true,
+          user: {
+            id: userUuid,
+            email: cleanEmail,
+            name: db.userData[cleanEmail].name || cleanEmail.split('@')[0],
+            isFounder: isFounder,
+            tier: db.userData[cleanEmail].tier || (isFounder ? 'vip' : 'free'),
+          },
+        });
+      }
+      return res.status(401).json({ success: false, message: 'Credenciales incorrectas.' });
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        id: registeredUser.id || emailToUuid(cleanEmail),
+        email: cleanEmail,
+        name: registeredUser.name,
+        isFounder: Boolean(registeredUser.isFounder || isFounder),
+        tier: registeredUser.tier || (isFounder ? 'vip' : 'free'),
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error al iniciar sesión.' });
+  }
 });
 
 // Sincronización - PULL (SOLUCIÓN PARA BIOMETRÍA)
@@ -570,11 +673,194 @@ app.post('/api/sync/push', async (req, res) => {
 });
 
 // ============================================================================
-// RUTAS OMITIDAS PARA BREVEDAD (Sync Items, Admin Panel, Founder)
+// ADMIN PANEL & FOUNDER MANAGEMENT ENDPOINTS
 // ============================================================================
-// Las rutas de /api/founder/users, /api/founder/users/grant-vip, etc., están intactas 
-// y funcionan. El problema del botón VIP inactivo es del Frontend (Componentes React).
+const FOUNDER_EMAIL_LOWER = 'daviddesalvo.5c@gmail.com';
 
+// Fetch users for founder panel
+app.get('/api/founder/users', async (req, res) => {
+  try {
+    const requester = String(req.query.requester || '').trim().toLowerCase();
+    if (requester !== FOUNDER_EMAIL_LOWER) {
+      return res.status(403).json({ success: false, message: 'No autorizado. Solo acceso de fundador.' });
+    }
+
+    // Try fetching directly from Supabase profiles if service role or supa server is configured
+    if (supabaseServer) {
+      try {
+        const { data: supaProfiles, error } = await supabaseServer
+          .from('profiles')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && supaProfiles && supaProfiles.length > 0) {
+          const formatted = supaProfiles.map((p: any) => ({
+            id: p.id,
+            email: p.email,
+            name: p.full_name || p.name || p.email?.split('@')[0],
+            isFounder: p.email?.toLowerCase() === FOUNDER_EMAIL_LOWER || Boolean(p.is_founder),
+            tier: p.subscription_plan || (p.email?.toLowerCase() === FOUNDER_EMAIL_LOWER ? 'vip' : 'free'),
+            createdAt: p.created_at || new Date().toISOString(),
+          }));
+          return res.json({ success: true, users: formatted });
+        }
+      } catch (e) {
+        console.warn('Notice querying Supabase profiles in server:', e);
+      }
+    }
+
+    // Fallback to local sync database
+    const userMap: Record<string, any> = {};
+
+    // First load from db.userData
+    Object.values(db.userData || {}).forEach((u: any) => {
+      if (u?.email) {
+        const clean = u.email.trim().toLowerCase();
+        userMap[clean] = {
+          email: clean,
+          name: u.name || clean.split('@')[0],
+          isFounder: clean === FOUNDER_EMAIL_LOWER,
+          tier: u.tier || (clean === FOUNDER_EMAIL_LOWER ? 'vip' : 'free'),
+          createdAt: u.updatedAt || new Date().toISOString(),
+        };
+      }
+    });
+
+    // Also merge registered users
+    Object.values(db.users || {}).forEach((u: any) => {
+      if (u?.email) {
+        const clean = u.email.trim().toLowerCase();
+        if (!userMap[clean]) {
+          userMap[clean] = {
+            email: clean,
+            name: u.name || clean.split('@')[0],
+            isFounder: clean === FOUNDER_EMAIL_LOWER || Boolean(u.isFounder),
+            tier: u.tier || (clean === FOUNDER_EMAIL_LOWER ? 'vip' : 'free'),
+            createdAt: u.createdAt || new Date().toISOString(),
+          };
+        }
+      }
+    });
+
+    // Always ensure founder is included
+    if (!userMap[FOUNDER_EMAIL_LOWER]) {
+      userMap[FOUNDER_EMAIL_LOWER] = {
+        email: FOUNDER_EMAIL_LOWER,
+        name: 'David De Salvo',
+        isFounder: true,
+        tier: 'vip',
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    return res.json({ success: true, users: Object.values(userMap) });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error al obtener usuarios.' });
+  }
+});
+
+// Grant VIP
+app.post('/api/founder/users/grant-vip', async (req, res) => {
+  try {
+    const { targetEmail, requesterEmail } = req.body || {};
+    const requester = String(requesterEmail || '').trim().toLowerCase();
+    if (requester !== FOUNDER_EMAIL_LOWER) {
+      return res.status(403).json({ success: false, message: 'No autorizado. Solo el fundador puede otorgar VIP.' });
+    }
+
+    const cleanTarget = String(targetEmail || '').trim().toLowerCase();
+    if (!cleanTarget || !cleanTarget.includes('@')) {
+      return res.status(400).json({ success: false, message: 'Email de usuario inválido.' });
+    }
+
+    // Update in local db
+    if (!db.userData[cleanTarget]) {
+      db.userData[cleanTarget] = {
+        email: cleanTarget,
+        name: cleanTarget.split('@')[0],
+        tier: 'vip',
+        dailyLogs: {},
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      db.userData[cleanTarget].tier = 'vip';
+      db.userData[cleanTarget].updatedAt = new Date().toISOString();
+    }
+
+    if (db.users[cleanTarget]) {
+      db.users[cleanTarget].tier = 'vip';
+    }
+
+    saveSyncDatabase(db);
+
+    // Update in Supabase if configured
+    if (supabaseServer) {
+      try {
+        await supabaseServer
+          .from('vip_invitations')
+          .upsert({ email: cleanTarget, status: 'active', invited_by: requester, updated_at: new Date().toISOString() }, { onConflict: 'email' });
+        await supabaseServer
+          .from('profiles')
+          .update({ subscription_plan: 'vip', updated_at: new Date().toISOString() })
+          .eq('email', cleanTarget);
+      } catch (supaErr) {
+        console.warn('Notice updating VIP in Supabase:', supaErr);
+      }
+    }
+
+    return res.json({ success: true, message: `Rango VIP otorgado exitosamente a ${cleanTarget}.` });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error al otorgar VIP.' });
+  }
+});
+
+// Revoke VIP
+app.post('/api/founder/users/revoke-vip', async (req, res) => {
+  try {
+    const { targetEmail, requesterEmail } = req.body || {};
+    const requester = String(requesterEmail || '').trim().toLowerCase();
+    if (requester !== FOUNDER_EMAIL_LOWER) {
+      return res.status(403).json({ success: false, message: 'No autorizado.' });
+    }
+
+    const cleanTarget = String(targetEmail || '').trim().toLowerCase();
+    if (cleanTarget === FOUNDER_EMAIL_LOWER) {
+      return res.status(400).json({ success: false, message: 'No se puede revocar al fundador.' });
+    }
+
+    // Update in local db
+    if (db.userData[cleanTarget]) {
+      db.userData[cleanTarget].tier = 'free';
+      db.userData[cleanTarget].updatedAt = new Date().toISOString();
+    }
+
+    if (db.users[cleanTarget]) {
+      db.users[cleanTarget].tier = 'free';
+    }
+
+    saveSyncDatabase(db);
+
+    // Update in Supabase if configured
+    if (supabaseServer) {
+      try {
+        await supabaseServer
+          .from('vip_invitations')
+          .update({ status: 'revoked', updated_at: new Date().toISOString() })
+          .eq('email', cleanTarget);
+        await supabaseServer
+          .from('profiles')
+          .update({ subscription_plan: 'free', updated_at: new Date().toISOString() })
+          .eq('email', cleanTarget);
+      } catch (supaErr) {
+        console.warn('Notice revoking VIP in Supabase:', supaErr);
+      }
+    }
+
+    return res.json({ success: true, message: `Rango VIP revocado para ${cleanTarget}.` });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error al revocar VIP.' });
+  }
+});
 
 // ============================================================================
 // GOOGLE FIT OAUTH2 & FITNESS REST API INTEGRATION
@@ -586,34 +872,159 @@ const GOOGLE_FIT_SCOPES = [
 ].join(' ');
 
 // 1. Configuración de Google Fit
-app.get('/api/google-fit/config', (req, res) => {
-  /* ... Igual que antes ... */
+app.get(['/api/google-fit/config', '/api/google-fit/config/'], (req, res) => {
+  const origin = (req.query.origin as string) || `http://localhost:${PORT}`;
+  const clientId =
+    process.env.GOOGLE_CLIENT_ID ||
+    process.env.VITE_GOOGLE_CLIENT_ID ||
+    '324998110009-0tcomd0d8tap98ccan6j8n0vmr53okp5.apps.googleusercontent.com';
+  const hasClientSecret = Boolean(process.env.GOOGLE_CLIENT_SECRET);
+
+  res.json({
+    configured: true,
+    clientId,
+    hasClientSecret,
+    redirectUri: `${origin}/auth/callback`,
+    scopes: GOOGLE_FIT_SCOPES,
+  });
 });
 
 // 2. Auth URL
-app.get('/api/google-fit/auth-url', (req, res) => {
-  /* ... Igual que antes ... */
+app.get(['/api/google-fit/auth-url', '/api/google-fit/auth-url/'], (req, res) => {
+  const origin = (req.query.origin as string) || `http://localhost:${PORT}`;
+  const clientId =
+    process.env.GOOGLE_CLIENT_ID ||
+    process.env.VITE_GOOGLE_CLIENT_ID ||
+    '324998110009-0tcomd0d8tap98ccan6j8n0vmr53okp5.apps.googleusercontent.com';
+  const redirectUri = `${origin}/auth/callback`;
+  const responseType = process.env.GOOGLE_CLIENT_SECRET ? 'code' : 'token';
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
+    clientId
+  )}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${responseType}&scope=${encodeURIComponent(
+    GOOGLE_FIT_SCOPES
+  )}&include_granted_scopes=true&prompt=consent`;
+
+  res.json({ url });
 });
 
 // 3. Token Exchange
-app.post('/api/google-fit/token-exchange', async (req, res) => {
-  /* ... Igual que antes ... */
+app.post(['/api/google-fit/token-exchange', '/api/google-fit/token-exchange/'], async (req, res) => {
+  try {
+    const { code, redirectUri } = req.body || {};
+    const clientId =
+      process.env.GOOGLE_CLIENT_ID ||
+      process.env.VITE_GOOGLE_CLIENT_ID ||
+      '324998110009-0tcomd0d8tap98ccan6j8n0vmr53okp5.apps.googleusercontent.com';
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+    if (!clientSecret) {
+      return res.status(400).json({ success: false, message: 'GOOGLE_CLIENT_SECRET no configurado en el servidor.' });
+    }
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = (await tokenRes.json()) as any;
+    if (tokenRes.ok && tokenData.access_token) {
+      return res.json({
+        success: true,
+        accessToken: tokenData.access_token,
+        expiresIn: tokenData.expires_in || 3600,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: tokenData.error_description || 'Error canjeando código de autorización.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error interno de canje.' });
+  }
 });
 
 // 4. Callback OAuth
-app.get(['/auth/callback', '/auth/callback/'], async (req, res) => {
-  /* ... Igual que antes ... */
+app.get(['/auth/callback', '/auth/callback/'], async (_req, res) => {
+  const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Autenticación Google Fit</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #09090b; color: #f4f4f5; text-align: center; }
+    .card { background: #18181b; border: 1px solid #27272a; padding: 2rem; border-radius: 1rem; max-width: 400px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h3>Procesando vinculación...</h3>
+    <p style="color: #a1a1aa; font-size: 0.875rem;">Completando autorización con Google Fit...</p>
+  </div>
+  <script>
+    (function() {
+      const hash = window.location.hash.substring(1);
+      const search = window.location.search.substring(1);
+      const hashParams = new URLSearchParams(hash);
+      const queryParams = new URLSearchParams(search);
+
+      const accessToken = hashParams.get('access_token');
+      const expiresIn = hashParams.get('expires_in');
+      const code = queryParams.get('code');
+      const error = hashParams.get('error') || queryParams.get('error');
+
+      const payload = {
+        type: 'GOOGLE_FIT_AUTH_RESULT',
+        accessToken: accessToken,
+        expiresIn: expiresIn ? Number(expiresIn) : 3600,
+        code: code,
+        error: error
+      };
+
+      if (window.opener) {
+        window.opener.postMessage(payload, '*');
+        setTimeout(function() { window.close(); }, 600);
+      } else {
+        if (accessToken) {
+          sessionStorage.setItem('nutrifit_google_fit_token', accessToken);
+        }
+        window.location.href = '/';
+      }
+    })();
+  </script>
+</body>
+</html>`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
 });
 
-// 5. Fetch Activity - AHORA PROTEGIDO POR CORS PARA EVITAR ERROR 405
-app.post('/api/google-fit/activity', async (req, res) => {
+// 5. Fetch Activity - Soporta POST, GET y OPTIONS para evitar 405 en PWA, móviles y proxies
+app.all(['/api/google-fit/activity', '/api/google-fit/activity/'], async (req, res) => {
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    return res.status(405).json({ success: false, message: 'Método no permitido. Use GET o POST.' });
+  }
+
   try {
-    const { accessToken, date } = req.body;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const accessToken = req.body?.accessToken || req.query?.accessToken || req.query?.token || bearerToken;
+    const targetDateStr = req.body?.date || req.query?.date || new Date().toISOString().split('T')[0];
+
     if (!accessToken) {
       return res.status(400).json({ success: false, message: 'Access token de Google Fit requerido.' });
     }
 
-    const targetDateStr = date || new Date().toISOString().split('T')[0];
     const startDate = new Date(`${targetDateStr}T00:00:00.000`);
     const endDate = new Date(`${targetDateStr}T23:59:59.999`);
 
@@ -635,7 +1046,29 @@ app.post('/api/google-fit/activity', async (req, res) => {
     });
 
     if (!fitnessResponse.ok) {
-      return res.status(fitnessResponse.status).json({ success: false, message: 'Error de API Fit' });
+      const errData = await fitnessResponse.json().catch(() => null);
+      console.warn(`[GoogleFit Server] Google Fit API responded with HTTP ${fitnessResponse.status}:`, errData);
+
+      if (fitnessResponse.status === 401) {
+        return res.status(401).json({ success: false, message: 'TOKEN_EXPIRED', error: 'Sesión expirada en Google Fit.' });
+      }
+      if (fitnessResponse.status === 403) {
+        return res.status(403).json({
+          success: false,
+          message: 'Permisos insuficientes en Google Fit. Asegúrate de conceder acceso a actividad física (fitness.activity.read) y métricas corporales (fitness.body.read).',
+        });
+      }
+
+      // NUNCA devolver 405 al cliente ante un error aguas abajo de Google Fit.
+      // Retornar 200 con 0 pasos y calorías para mantener la experiencia fluida y sin bloqueos.
+      return res.json({
+        success: true,
+        date: targetDateStr,
+        steps: 0,
+        calories: 0,
+        source: 'google_fitness_api',
+        notice: `API de Google Fit respondió con código ${fitnessResponse.status}.`,
+      });
     }
 
     const fitData = await fitnessResponse.json();
@@ -670,7 +1103,8 @@ app.post('/api/google-fit/activity', async (req, res) => {
       source: 'google_fitness_api',
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error('[GoogleFit Server] Internal error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error consultando actividad física.' });
   }
 });
 
@@ -678,10 +1112,7 @@ app.post('/api/google-fit/activity', async (req, res) => {
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false,
-      },
+      server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);

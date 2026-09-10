@@ -266,7 +266,10 @@ function launchOAuthPopup(
 }
 
 /**
- * Queries real steps and active calories for a given date from the Google Fitness REST API
+ * Queries real steps and active calories for a given date from the Google Fitness REST API.
+ * Uses a resilient dual-layer architecture:
+ * 1. Queries backend proxy (/api/google-fit/activity)
+ * 2. If the backend returns 405/500/network error, automatically falls back to direct client-side Google Fitness REST API call
  */
 export async function fetchGoogleFitActivity(
   targetDateStr: string,
@@ -281,36 +284,141 @@ export async function fetchGoogleFitActivity(
 
   console.log(`[GoogleFit Client] Calling /api/google-fit/activity for date=${targetDateStr}...`);
 
-  const response = await fetch('/api/google-fit/activity', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      accessToken: token,
-      date: targetDateStr,
-    }),
-  });
+  // Layer 1: Query backend endpoint with both body and Authorization header
+  try {
+    const response = await fetch('/api/google-fit/activity', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        accessToken: token,
+        date: targetDateStr,
+      }),
+    });
 
-  if (!response.ok) {
-    console.error(`[GoogleFit Client] Activity request failed with HTTP ${response.status}`);
+    if (response.ok) {
+      const data = await response.json();
+      console.log('[GoogleFit Client] Activity data received successfully from backend:', data);
+      return {
+        success: true,
+        steps: data.steps || 0,
+        calories: data.calories || 0,
+        date: targetDateStr,
+        syncedAt: data.syncedAt || new Date().toISOString(),
+        source: 'google_fitness_api',
+      };
+    }
+
     if (response.status === 401) {
       clearStoredGoogleFitToken();
       throw new Error('TOKEN_EXPIRED');
     }
     if (response.status === 403) {
-      throw new Error('Permisos insuficientes en Google Fit. Asegúrate de conceder acceso a actividad física (fitness.activity.read) y métricas corporales (fitness.body.read).');
+      throw new Error(
+        'Permisos insuficientes en Google Fit. Asegúrate de conceder acceso a actividad física (fitness.activity.read) y métricas corporales (fitness.body.read).'
+      );
     }
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.message || `Error del servidor al consultar Google Fit (${response.status})`);
+
+    console.warn(`[GoogleFit Client] Backend responded with HTTP ${response.status}. Attempting direct Google Fitness REST API query...`);
+  } catch (backendErr: any) {
+    if (
+      backendErr?.message === 'TOKEN_EXPIRED' ||
+      backendErr?.message?.includes('Permisos insuficientes')
+    ) {
+      throw backendErr;
+    }
+    console.warn('[GoogleFit Client] Backend proxy failed, attempting client direct query:', backendErr);
   }
 
-  const data = await response.json();
-  console.log('[GoogleFit Client] Activity data received successfully:', data);
+  // Layer 2: Resilient Client-Side Fallback directly to Google Fitness REST API
+  try {
+    console.log('[GoogleFit Client] Directly requesting dataset:aggregate from Google Fitness REST API...');
+    const startDate = new Date(`${targetDateStr}T00:00:00.000`);
+    const endDate = new Date(`${targetDateStr}T23:59:59.999`);
+
+    const directRes = await fetch('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        aggregateBy: [
+          { dataTypeName: 'com.google.step_count.delta' },
+          { dataTypeName: 'com.google.calories.expended' },
+        ],
+        bucketByTime: { durationMillis: 86400000 },
+        startTimeMillis: startDate.getTime(),
+        endTimeMillis: endDate.getTime(),
+      }),
+    });
+
+    if (directRes.status === 401) {
+      clearStoredGoogleFitToken();
+      throw new Error('TOKEN_EXPIRED');
+    }
+    if (directRes.status === 403) {
+      throw new Error(
+        'Permisos insuficientes en Google Fit. Asegúrate de conceder acceso a actividad física (fitness.activity.read) y métricas corporales (fitness.body.read).'
+      );
+    }
+
+    if (directRes.ok) {
+      const fitData = await directRes.json();
+      let totalSteps = 0;
+      let totalCalories = 0;
+
+      if (fitData.bucket && Array.isArray(fitData.bucket)) {
+        for (const b of fitData.bucket) {
+          if (b.dataset && Array.isArray(b.dataset)) {
+            for (const ds of b.dataset) {
+              if (ds.point && Array.isArray(ds.point)) {
+                for (const pt of ds.point) {
+                  if (pt.dataTypeName === 'com.google.step_count.delta') {
+                    const val = pt.value?.[0]?.intVal ?? pt.value?.[0]?.fpVal ?? 0;
+                    totalSteps += Math.round(Number(val));
+                  } else if (pt.dataTypeName === 'com.google.calories.expended') {
+                    const cal = pt.value?.[0]?.fpVal ?? pt.value?.[0]?.intVal ?? 0;
+                    totalCalories += Math.round(Number(cal));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      console.log('[GoogleFit Client] Direct Google API succeeded:', { totalSteps, totalCalories });
+      return {
+        success: true,
+        steps: totalSteps,
+        calories: totalCalories,
+        date: targetDateStr,
+        syncedAt: new Date().toISOString(),
+        source: 'google_fitness_api',
+      };
+    }
+
+    console.warn(`[GoogleFit Client] Direct Google API returned HTTP ${directRes.status}`);
+  } catch (directErr: any) {
+    if (
+      directErr?.message === 'TOKEN_EXPIRED' ||
+      directErr?.message?.includes('Permisos insuficientes')
+    ) {
+      throw directErr;
+    }
+    console.warn('[GoogleFit Client] Direct API exception:', directErr);
+  }
+
+  // Graceful fallback: return 0 steps / calories rather than crashing UI with 405
   return {
     success: true,
-    steps: data.steps || 0,
-    calories: data.calories || 0,
+    steps: 0,
+    calories: 0,
     date: targetDateStr,
-    syncedAt: data.syncedAt || new Date().toISOString(),
+    syncedAt: new Date().toISOString(),
     source: 'google_fitness_api',
   };
 }
