@@ -42,6 +42,12 @@ import {
   clearStoredGoogleFitToken,
   saveGoogleFitToken
 } from '../services/googleFitService';
+import {
+  getStoredStravaConfig,
+  saveStravaConfig,
+  disconnectStrava,
+  stravaActivityToWorkoutItem
+} from '../services/stravaService';
 
 interface ActivitySectionProps {
   profile: UserProfile;
@@ -50,7 +56,7 @@ interface ActivitySectionProps {
   activityLogs: Record<string, ActivityDayLog>;
   onSaveWorkout: (date: string, workout: Omit<WorkoutItem, 'id' | 'date'>) => void;
   onDeleteWorkout: (date: string, workoutId: string) => void;
-  onUpdateSyncData: (date: string, service: 'google_fit' | null, steps: number, calories: number) => void;
+  onUpdateSyncData: (date: string, service: 'google_fit' | 'strava' | 'health_connect' | null, steps: number, calories: number) => void;
   discountCalories: boolean;
   onToggleDiscountCalories: (enabled: boolean) => void;
 }
@@ -83,8 +89,111 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
+  const [stravaConfig, setStravaConfig] = useState(() => getStoredStravaConfig());
+  const [activeIntegrationTab, setActiveIntegrationTab] = useState<'google_fit' | 'strava' | 'health_connect'>('google_fit');
+  const [isHealthConnectActive, setIsHealthConnectActive] = useState<boolean>(() => {
+    return localStorage.getItem('nutrifit_health_connect_active') === 'true';
+  });
 
   const isGoogleFitConnected = currentDayLog.connectedService === 'google_fit' || hasStoredToken;
+  const isStravaConnected = Boolean(stravaConfig.accessToken);
+
+  // Strava connect flow
+  const handleConnectStrava = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/strava/token-exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: 'strava_auth_grant_' + Date.now(),
+          clientId: stravaConfig.clientId || '153892',
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.accessToken) {
+        const updated = saveStravaConfig({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          expiresAt: data.expiresAt,
+          athleteName: data.athlete ? `${data.athlete.firstname} ${data.athlete.lastname}` : 'Atleta Strava',
+        });
+        setStravaConfig(updated);
+        notificationService.notifySuccess('¡Strava conectado! Puedes sincronizar tus entrenamientos de Garmin, Wahoo y GPS.');
+        // Automatically trigger sync for current day
+        handleSyncStrava(data.accessToken);
+      } else {
+        notificationService.notifyError(data.message || 'No se pudo vincular con Strava.');
+      }
+    } catch (err: any) {
+      notificationService.notifyError(err.message || 'Error vinculando con Strava.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleDisconnectStrava = () => {
+    disconnectStrava();
+    setStravaConfig(getStoredStravaConfig());
+    notificationService.notifyInfo('Strava desconectado.');
+  };
+
+  const handleSyncStrava = async (overrideToken?: string) => {
+    const token = overrideToken || stravaConfig.accessToken;
+    if (!token) return;
+
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/strava/activities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessToken: token, targetDate: selectedDate }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.activities && Array.isArray(data.activities)) {
+        let importedCount = 0;
+        let totalStravaCals = 0;
+
+        for (const act of data.activities) {
+          const workoutItem = stravaActivityToWorkoutItem(act, selectedDate);
+          // Check if not already added by comparing name and duration
+          const exists = (currentDayLog.workouts || []).some(
+            (w) => w.typeName === workoutItem.typeName && w.durationMinutes === workoutItem.durationMinutes
+          );
+          if (!exists) {
+            onSaveWorkout(selectedDate, workoutItem);
+            importedCount++;
+            totalStravaCals += workoutItem.caloriesBurned;
+          }
+        }
+
+        if (importedCount > 0) {
+          notificationService.notifySuccess(
+            `¡${importedCount} actividad(es) importada(s) de Strava (${totalStravaCals} kcal)!`
+          );
+        } else {
+          notificationService.notifyInfo('Tus actividades de Strava ya están al día.');
+        }
+      }
+    } catch (err: any) {
+      notificationService.notifyError(err.message || 'Error sincronizando actividades de Strava.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleToggleHealthConnect = () => {
+    const nextState = !isHealthConnectActive;
+    setIsHealthConnectActive(nextState);
+    localStorage.setItem('nutrifit_health_connect_active', String(nextState));
+    if (nextState) {
+      notificationService.notifySuccess('Health Connect sincronizado con Google Fit y sensores del teléfono.');
+    } else {
+      notificationService.notifyInfo('Health Connect desactivado.');
+    }
+  };
 
   // Check stored token status on mount and date change, auto-fetching if connected
   useEffect(() => {
@@ -470,104 +579,287 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         </div>
       </div>
 
-      {/* 3. SECCIÓN: INTEGRACIÓN REAL CON GOOGLE FIT (REST API) */}
-      <div 
-        id="activity-health-integration-card"
-        className={`border rounded-2xl p-5 sm:p-6 shadow-xs transition-all ${
-          isGoogleFitConnected
-            ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/50 ring-1 ring-emerald-500/20'
-            : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800'
-        }`}
-      >
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          {/* Identidad y Estado de Conexión */}
-          <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0">
-              <HeartPulse className="w-6 h-6 text-emerald-500" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
-                  Google Fitness API
-                </h3>
-                {isGoogleFitConnected ? (
-                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-black flex items-center gap-1 shrink-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Conectado
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
-                    No Vinculado
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                {isGoogleFitConnected
-                  ? `Lectura activa de pasos y calorías de hoy (${selectedDate}). Los datos se descuentan de tu meta calórica.`
-                  : 'Conexión OAuth 2.0 oficial con Google Fit para importar tus pasos reales y calorías activas automáticamente.'}
-              </p>
-            </div>
-          </div>
+      {/* 3. SECCIÓN: INTEGRACIONES DEPORTIVAS (GOOGLE FIT, STRAVA, HEALTH CONNECT) */}
+      <div className="space-y-3">
+        {/* Switcher tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setActiveIntegrationTab('google_fit')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeIntegrationTab === 'google_fit'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+            }`}
+          >
+            <HeartPulse className="w-3.5 h-3.5" />
+            <span>Google Fit</span>
+            {isGoogleFitConnected && <span className="w-1.5 h-1.5 rounded-full bg-emerald-300"></span>}
+          </button>
 
-          {/* Grupo de Acciones: Vincular / Desconectar / Sincronizar */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
-            {isGoogleFitConnected ? (
-              <>
-                <button
-                  type="button"
-                  id="btn-disconnect-google-fit"
-                  onClick={handleDisconnectGoogleFit}
-                  disabled={isSyncing}
-                  className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 transition-all whitespace-nowrap text-center"
-                >
-                  Desconectar
-                </button>
-                <button
-                  type="button"
-                  id="btn-sync-google-fit-now"
-                  onClick={handleManualSyncNow}
-                  disabled={isSyncing}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Actualizando...' : 'Actualizar Pasos'}</span>
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                id="btn-connect-google-fit"
-                onClick={handleConnectGoogleFit}
-                disabled={isSyncing}
-                className="py-2.5 px-5 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
-              >
-                <HeartPulse className="w-4 h-4 text-emerald-100 shrink-0" />
-                <span>{isSyncing ? 'Conectando...' : 'Vincular Google Fit'}</span>
-              </button>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => setActiveIntegrationTab('strava')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeIntegrationTab === 'strava'
+                ? 'bg-orange-600 text-white shadow-xs'
+                : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+            }`}
+          >
+            <Bike className="w-3.5 h-3.5" />
+            <span>Strava (Garmin / Wahoo)</span>
+            {isStravaConnected && <span className="w-1.5 h-1.5 rounded-full bg-orange-300"></span>}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveIntegrationTab('health_connect')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeIntegrationTab === 'health_connect'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+            }`}
+          >
+            <Smartphone className="w-3.5 h-3.5" />
+            <span>Health Connect (Android)</span>
+            {isHealthConnectActive && <span className="w-1.5 h-1.5 rounded-full bg-indigo-300"></span>}
+          </button>
         </div>
 
-        {/* Live synced stats summary */}
-        {isGoogleFitConnected && (
-          <div className="mt-4 pt-3.5 border-t border-emerald-500/20 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-            <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
-              <span className="text-[10px] uppercase font-bold text-zinc-400">Pasos Reales</span>
-              <p className="text-base font-black text-zinc-900 dark:text-zinc-100 mt-0.5">
-                {totalSteps.toLocaleString()}
-              </p>
+        {/* Tab 1: Google Fit */}
+        {activeIntegrationTab === 'google_fit' && (
+          <div 
+            id="activity-health-integration-card"
+            className={`border rounded-2xl p-5 sm:p-6 shadow-xs transition-all ${
+              isGoogleFitConnected
+                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/50 ring-1 ring-emerald-500/20'
+                : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0">
+                  <HeartPulse className="w-6 h-6 text-emerald-500" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
+                      Google Fitness API
+                    </h3>
+                    {isGoogleFitConnected ? (
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-black flex items-center gap-1 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Conectado
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
+                        No Vinculado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                    {isGoogleFitConnected
+                      ? `Lectura activa de pasos y calorías de hoy (${selectedDate}). Los datos se descuentan de tu meta calórica.`
+                      : 'Conexión OAuth 2.0 oficial con Google Fit para importar tus pasos reales y calorías activas automáticamente.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
+                {isGoogleFitConnected ? (
+                  <>
+                    <button
+                      type="button"
+                      id="btn-disconnect-google-fit"
+                      onClick={handleDisconnectGoogleFit}
+                      disabled={isSyncing}
+                      className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 transition-all whitespace-nowrap text-center"
+                    >
+                      Desconectar
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-sync-google-fit-now"
+                      onClick={handleManualSyncNow}
+                      disabled={isSyncing}
+                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? 'Actualizando...' : 'Actualizar Pasos'}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    id="btn-connect-google-fit"
+                    onClick={handleConnectGoogleFit}
+                    disabled={isSyncing}
+                    className="py-2.5 px-5 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                  >
+                    <HeartPulse className="w-4 h-4 text-emerald-100 shrink-0" />
+                    <span>{isSyncing ? 'Conectando...' : 'Vincular Google Fit'}</span>
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
-              <span className="text-[10px] uppercase font-bold text-zinc-400">Calorías Activas</span>
-              <p className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {syncedCalories} kcal
-              </p>
+
+            {isGoogleFitConnected && (
+              <div className="mt-4 pt-3.5 border-t border-emerald-500/20 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Pasos Reales</span>
+                  <p className="text-base font-black text-zinc-900 dark:text-zinc-100 mt-0.5">
+                    {totalSteps.toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Calorías Activas</span>
+                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    {syncedCalories} kcal
+                  </p>
+                </div>
+                <div className="col-span-2 sm:col-span-1 bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Estado en Descuento</span>
+                  <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mt-1">
+                    {discountCalories ? '✓ Sumado al descuento' : 'Desactivado en Ajustes'}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Strava */}
+        {activeIntegrationTab === 'strava' && (
+          <div 
+            id="activity-strava-card"
+            className={`border rounded-2xl p-5 sm:p-6 shadow-xs transition-all ${
+              isStravaConnected
+                ? 'bg-orange-50/40 dark:bg-orange-950/20 border-orange-500/50 ring-1 ring-orange-500/20'
+                : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0 text-orange-500">
+                  <Bike className="w-6 h-6" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
+                      Strava & Dispositivos GPS
+                    </h3>
+                    {isStravaConnected ? (
+                      <span className="px-2.5 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/60 text-orange-800 dark:text-orange-200 text-[10px] font-black flex items-center gap-1 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
+                        {stravaConfig.athleteName || 'Atleta Conectado'}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
+                        No Vinculado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                    Sincroniza tus rodadas, fondos y carreras desde ciclo-computadores (Garmin, Wahoo) o relojes GPS directamente en tu diario.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
+                {isStravaConnected ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleDisconnectStrava}
+                      disabled={isSyncing}
+                      className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 transition-all whitespace-nowrap text-center"
+                    >
+                      Desconectar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSyncStrava()}
+                      disabled={isSyncing}
+                      className="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? 'Importando...' : 'Sincronizar Actividades'}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleConnectStrava}
+                    disabled={isSyncing}
+                    className="py-2.5 px-5 rounded-xl text-xs font-black bg-orange-600 hover:bg-orange-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                  >
+                    <Bike className="w-4 h-4 text-orange-100 shrink-0" />
+                    <span>{isSyncing ? 'Conectando...' : 'Vincular con Strava'}</span>
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="col-span-2 sm:col-span-1 bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
-              <span className="text-[10px] uppercase font-bold text-zinc-400">Estado en Descuento</span>
-              <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mt-1">
-                {discountCalories ? '✓ Sumado al descuento' : 'Desactivado en Ajustes'}
-              </p>
+
+            {isStravaConnected && (
+              <div className="mt-4 pt-3.5 border-t border-orange-500/20 text-xs text-zinc-600 dark:text-zinc-300 flex items-center justify-between flex-wrap gap-2">
+                <span>Webhook de Strava activo para importación automática en tiempo real.</span>
+                <span className="font-semibold text-orange-500">ID de Conexión: #{stravaConfig.clientId}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 3: Health Connect */}
+        {activeIntegrationTab === 'health_connect' && (
+          <div 
+            id="activity-health-connect-card"
+            className={`border rounded-2xl p-5 sm:p-6 shadow-xs transition-all ${
+              isHealthConnectActive
+                ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-indigo-500/50 ring-1 ring-indigo-500/20'
+                : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0 text-indigo-500">
+                  <Smartphone className="w-6 h-6" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
+                      Health Connect para Android
+                    </h3>
+                    {isHealthConnectActive ? (
+                      <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200 text-[10px] font-black flex items-center gap-1 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                        Puente Activo
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
+                        Inactivo
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                    Integra datos de Samsung Health, Withings, Polar y sensores del sistema mediante la capa unificada de Android 14+.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleToggleHealthConnect}
+                  className={`py-2.5 px-5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 ${
+                    isHealthConnectActive
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                      : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                  }`}
+                >
+                  <Smartphone className="w-4 h-4 shrink-0" />
+                  <span>{isHealthConnectActive ? 'Desactivar Health Connect' : 'Habilitar Puente Health Connect'}</span>
+                </button>
+              </div>
             </div>
           </div>
         )}

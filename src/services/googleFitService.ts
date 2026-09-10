@@ -282,7 +282,14 @@ export async function fetchGoogleFitActivity(
     throw new Error('NO_TOKEN');
   }
 
-  console.log(`[GoogleFit Client] Calling /api/google-fit/activity for date=${targetDateStr}...`);
+  // Calculate exact user device midnight to end-of-day in local time
+  const [year, month, day] = targetDateStr.split('-').map(Number);
+  const localStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const localEnd = new Date(year, month - 1, day, 23, 59, 59, 999);
+  const startTimeMillis = localStart.getTime();
+  const endTimeMillis = localEnd.getTime();
+
+  console.log(`[GoogleFit Client] Calling /api/google-fit/activity for date=${targetDateStr} (${startTimeMillis} - ${endTimeMillis})...`);
 
   // Layer 1: Query backend endpoint with both body and Authorization header
   try {
@@ -295,6 +302,8 @@ export async function fetchGoogleFitActivity(
       body: JSON.stringify({
         accessToken: token,
         date: targetDateStr,
+        startTimeMillis,
+        endTimeMillis,
       }),
     });
 
@@ -335,8 +344,6 @@ export async function fetchGoogleFitActivity(
   // Layer 2: Resilient Client-Side Fallback directly to Google Fitness REST API
   try {
     console.log('[GoogleFit Client] Directly requesting dataset:aggregate from Google Fitness REST API...');
-    const startDate = new Date(`${targetDateStr}T00:00:00.000`);
-    const endDate = new Date(`${targetDateStr}T23:59:59.999`);
 
     const directRes = await fetch('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
       method: 'POST',
@@ -346,12 +353,14 @@ export async function fetchGoogleFitActivity(
       },
       body: JSON.stringify({
         aggregateBy: [
+          { dataTypeName: 'com.google.step_count.delta', dataSourceId: 'derived:com.google.step_count.delta:com.google.android.gms:estimated_steps' },
           { dataTypeName: 'com.google.step_count.delta' },
+          { dataTypeName: 'com.google.calories.expended', dataSourceId: 'derived:com.google.calories.expended:com.google.android.gms:from_activities' },
           { dataTypeName: 'com.google.calories.expended' },
         ],
         bucketByTime: { durationMillis: 86400000 },
-        startTimeMillis: startDate.getTime(),
-        endTimeMillis: endDate.getTime(),
+        startTimeMillis,
+        endTimeMillis,
       }),
     });
 
@@ -367,21 +376,32 @@ export async function fetchGoogleFitActivity(
 
     if (directRes.ok) {
       const fitData = await directRes.json();
-      let totalSteps = 0;
-      let totalCalories = 0;
+      let estimatedSteps = 0;
+      let fallbackSteps = 0;
+      let activeCalories = 0;
+      let fallbackCalories = 0;
 
       if (fitData.bucket && Array.isArray(fitData.bucket)) {
         for (const b of fitData.bucket) {
           if (b.dataset && Array.isArray(b.dataset)) {
             for (const ds of b.dataset) {
+              const dsId = ds.dataSourceId || '';
               if (ds.point && Array.isArray(ds.point)) {
                 for (const pt of ds.point) {
                   if (pt.dataTypeName === 'com.google.step_count.delta') {
                     const val = pt.value?.[0]?.intVal ?? pt.value?.[0]?.fpVal ?? 0;
-                    totalSteps += Math.round(Number(val));
+                    if (dsId.includes('estimated_steps') || pt.originDataSourceId?.includes('estimated_steps')) {
+                      estimatedSteps += Math.round(Number(val));
+                    } else {
+                      fallbackSteps += Math.round(Number(val));
+                    }
                   } else if (pt.dataTypeName === 'com.google.calories.expended') {
                     const cal = pt.value?.[0]?.fpVal ?? pt.value?.[0]?.intVal ?? 0;
-                    totalCalories += Math.round(Number(cal));
+                    if (dsId.includes('from_activities') || pt.originDataSourceId?.includes('from_activities')) {
+                      activeCalories += Math.round(Number(cal));
+                    } else {
+                      fallbackCalories += Math.round(Number(cal));
+                    }
                   }
                 }
               }
@@ -389,6 +409,9 @@ export async function fetchGoogleFitActivity(
           }
         }
       }
+
+      const totalSteps = estimatedSteps > 0 ? estimatedSteps : fallbackSteps;
+      const totalCalories = activeCalories > 0 ? activeCalories : fallbackCalories;
 
       console.log('[GoogleFit Client] Direct Google API succeeded:', { totalSteps, totalCalories });
       return {

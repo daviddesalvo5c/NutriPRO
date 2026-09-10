@@ -336,9 +336,78 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
     setTimeout(() => setAddedSuccessMessage(null), 2500);
   };
 
-  // Build combined shopping list
+  // Supermarket Aisles Categorization & Weekly Multiplier
+  const [shoppingDaysMultiplier, setShoppingDaysMultiplier] = useState<number>(7); // Default to 7 days (weekly)
+  const [selectedAisleFilter, setSelectedAisleFilter] = useState<string>('all');
+
+  const SUPERMARKET_AISLES = [
+    {
+      id: 'carniceria',
+      name: 'Carnicería, Pescadería y Huevos',
+      icon: '🥩',
+      keywords: ['pollo', 'pechuga', 'carne', 'lomo', 'cuadril', 'bife', 'pescado', 'atún', 'atun', 'salmon', 'merluza', 'huevo', 'claras', 'jamon', 'pavo', 'cerdo'],
+    },
+    {
+      id: 'verduleria',
+      name: 'Verdulería y Frutería',
+      icon: '🥬',
+      keywords: ['tomate', 'espinaca', 'brocoli', 'calabaza', 'zapallito', 'zanahoria', 'lechuga', 'cebolla', 'manzana', 'banana', 'platano', 'arandano', 'palta', 'aguacate', 'limon', 'frutilla', 'pera', 'choclo', 'papa', 'batata', 'esparrago'],
+    },
+    {
+      id: 'lacteos',
+      name: 'Lácteos y Refrigerados',
+      icon: '🧀',
+      keywords: ['yogur', 'queso', 'leche', 'port salut', 'ricotta', 'manteca', 'crema', 'mozzarella', 'parmesano'],
+    },
+    {
+      id: 'almacen',
+      name: 'Almacén, Granos y Panadería',
+      icon: '🌾',
+      keywords: ['avena', 'arroz', 'pan', 'tostada', 'lenteja', 'garbanzo', 'poroto', 'pasta', 'fideos', 'chía', 'chia', 'semilla', 'nuez', 'almendra', 'mani', 'cereal', 'quinoa'],
+    },
+    {
+      id: 'especias',
+      name: 'Aceites, Condimentos e Infusiones',
+      icon: '🧂',
+      keywords: ['aceite', 'oliva', 'sal', 'pimienta', 'oregano', 'canela', 'estevia', 'edulcorante', 'cafe', 'te', 'vinagre', 'mostaza'],
+    },
+  ];
+
+  const categorizeIngredient = (itemStr: string): string => {
+    const lower = itemStr.toLowerCase();
+    for (const aisle of SUPERMARKET_AISLES) {
+      if (aisle.keywords.some((kw) => lower.includes(kw))) {
+        return aisle.id;
+      }
+    }
+    return 'otros';
+  };
+
+  const scaleIngredientQuantity = (itemStr: string, multiplier: number): string => {
+    if (multiplier <= 1) return itemStr;
+    // Match numbers with units (e.g., 60g, 200ml, 2 huevos)
+    return itemStr.replace(/(\d+(?:\.\d+)?)\s*(g|ml|kg|l|unidades?|huevos?|tostadas?)?/gi, (match, numStr, unit) => {
+      const num = parseFloat(numStr);
+      if (isNaN(num)) return match;
+      const scaled = Math.round(num * multiplier);
+      const u = unit ? ` ${unit}` : '';
+      return `${scaled}${u}`;
+    });
+  };
+
+  // Build combined shopping list with aisles
   const baseIngredients = currentPlan.flatMap((m) => m.ingredients);
-  const allShoppingItems = Array.from(new Set([...baseIngredients, ...customShoppingList]));
+  const allRawItems = Array.from(new Set([...baseIngredients, ...customShoppingList]));
+
+  const groupedShoppingList = allRawItems.map((rawItem) => {
+    const scaledText = scaleIngredientQuantity(rawItem, shoppingDaysMultiplier);
+    const aisleId = categorizeIngredient(rawItem);
+    return {
+      raw: rawItem,
+      text: scaledText,
+      aisleId,
+    };
+  });
 
   const toggleCheck = (item: string) => {
     setCheckedItems((prev) => ({ ...prev, [item]: !prev[item] }));
@@ -352,10 +421,34 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
   };
 
   const handleCopyShoppingList = () => {
-    const text = allShoppingItems
-      .map((item) => `${checkedItems[item] ? '✅' : '⬜'} ${item}`)
-      .join('\n');
-    navigator.clipboard.writeText(`Lista de la Compra - NutriFit Pro:\n\n${text}`);
+    const lines: string[] = [
+      `🛒 LISTA DE COMPRAS SEMANAL (${shoppingDaysMultiplier} DÍAS) - NUTRIPRO`,
+      '========================================',
+    ];
+
+    for (const aisle of SUPERMARKET_AISLES) {
+      const itemsInAisle = groupedShoppingList.filter((i) => i.aisleId === aisle.id);
+      if (itemsInAisle.length > 0) {
+        lines.push(`\n${aisle.icon} ${aisle.name.toUpperCase()}:`);
+        itemsInAisle.forEach((i) => {
+          const mark = checkedItems[i.raw] ? '✅' : '⬜';
+          lines.push(`  ${mark} ${i.text}`);
+        });
+      }
+    }
+
+    const otherItems = groupedShoppingList.filter((i) => i.aisleId === 'otros');
+    if (otherItems.length > 0) {
+      lines.push('\n🛍️ OTROS ARTÍCULOS:');
+      otherItems.forEach((i) => {
+        const mark = checkedItems[i.raw] ? '✅' : '⬜';
+        lines.push(`  ${mark} ${i.text}`);
+      });
+    }
+
+    lines.push('\nOrganizado automáticamente por pasillo con NutriFit Pro.');
+
+    navigator.clipboard.writeText(lines.join('\n'));
     setCopiedShopping(true);
     setTimeout(() => setCopiedShopping(false), 2000);
   };
@@ -473,7 +566,7 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 hover:scale-105"
                 >
                   <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>Actualizar a NutriFit Pro ($12.999 ARS/mes)</span>
+                  <span>Activar 30 Días de Prueba Gratis</span>
                 </button>
               )}
               <button
@@ -498,7 +591,17 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('shopping')}
+                className="px-3 py-2 bg-emerald-100/70 hover:bg-emerald-200/70 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-xs font-bold rounded-xl border border-emerald-300 dark:border-emerald-700/60 flex items-center gap-1.5 transition-colors shadow-2xs"
+                title="Compilar lista de compras por pasillos (carnicería, verdulería, almacén)"
+              >
+                <ShoppingCart className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Lista de Compras Semanal</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleRegeneratePlan}
@@ -751,23 +854,46 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
             <div>
               <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-emerald-500" />
-                Lista de la Compra Semanal Inteligente
+                Lista de Compras Semanal por Pasillo de Supermercado
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                Generada automáticamente a partir de tu menú nutricional planificado
+                Compilada automáticamente desde tu menú y agrupada en carnicería, verdulería y almacén
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Days multiplier */}
+              <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 px-1.5">Escala:</span>
+                {[
+                  { days: 1, label: '1 Día' },
+                  { days: 3, label: '3 Días' },
+                  { days: 7, label: 'Semana (7d)' },
+                ].map((m) => (
+                  <button
+                    key={m.days}
+                    type="button"
+                    onClick={() => setShoppingDaysMultiplier(m.days)}
+                    className={`py-1 px-2.5 rounded-lg text-xs font-bold transition-all ${
+                      shoppingDaysMultiplier === m.days
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
               <button
                 type="button"
                 onClick={handleCopyShoppingList}
-                className="py-2 px-3.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                className="py-2 px-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 hover:bg-emerald-100 text-emerald-800 dark:text-emerald-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
               >
                 {copiedShopping ? (
                   <>
                     <Check className="w-4 h-4 text-emerald-500" />
-                    <span>¡Copiada al Portapapeles!</span>
+                    <span>¡Copiada con Pasillos!</span>
                   </>
                 ) : (
                   <>
@@ -785,7 +911,7 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
               type="text"
               value={customShoppingItem}
               onChange={(e) => setCustomShoppingItem(e.target.value)}
-              placeholder="Añadir otro artículo al carrito (ej: café descafeinado, aceite)..."
+              placeholder="Añadir otro artículo al carrito (ej: 500g carne picada especial, yerba mate)..."
               className="flex-1 px-3.5 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-xl text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-emerald-500"
             />
             <button
@@ -797,34 +923,155 @@ export const PlannerAndRecipesSection: React.FC<PlannerAndRecipesSectionProps> =
             </button>
           </form>
 
-          {/* Checklist Items */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-            {allShoppingItems.map((item, idx) => {
-              const isChecked = !!checkedItems[item];
+          {/* Aisle Quick Filter Tabs */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setSelectedAisleFilter('all')}
+              className={`py-1.5 px-3 rounded-xl font-bold whitespace-nowrap transition-all ${
+                selectedAisleFilter === 'all'
+                  ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              Todos los pasillos ({groupedShoppingList.length})
+            </button>
+            {SUPERMARKET_AISLES.map((aisle) => {
+              const count = groupedShoppingList.filter((i) => i.aisleId === aisle.id).length;
+              if (count === 0) return null;
               return (
-                <div
-                  key={idx}
-                  onClick={() => toggleCheck(item)}
-                  className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center gap-2.5 ${
-                    isChecked
-                      ? 'bg-zinc-50 dark:bg-zinc-900/60 border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-500 line-through'
-                      : 'bg-zinc-50/70 dark:bg-zinc-800/40 hover:bg-zinc-100 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 font-medium'
+                <button
+                  key={aisle.id}
+                  type="button"
+                  onClick={() => setSelectedAisleFilter(aisle.id)}
+                  className={`py-1.5 px-3 rounded-xl font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    selectedAisleFilter === aisle.id
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200'
                   }`}
                 >
-                  <div className={`w-4 h-4 rounded-md border flex items-center justify-center transition-colors ${
-                    isChecked ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-zinc-300 dark:border-zinc-600'
-                  }`}>
-                    {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
-                  </div>
-                  <span className="text-xs truncate">{item}</span>
-                </div>
+                  <span>{aisle.icon}</span>
+                  <span>{aisle.name.split(',')[0]}</span>
+                  <span className="text-[10px] opacity-75">({count})</span>
+                </button>
               );
             })}
           </div>
 
+          {/* Grouped Aisle Sections */}
+          <div className="space-y-5">
+            {SUPERMARKET_AISLES.map((aisle) => {
+              if (selectedAisleFilter !== 'all' && selectedAisleFilter !== aisle.id) {
+                return null;
+              }
+              const aisleItems = groupedShoppingList.filter((i) => i.aisleId === aisle.id);
+              if (aisleItems.length === 0) return null;
+
+              const completedInAisle = aisleItems.filter((i) => checkedItems[i.raw]).length;
+
+              return (
+                <div
+                  key={aisle.id}
+                  className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 p-4 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{aisle.icon}</span>
+                      <h4 className="text-xs font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
+                        {aisle.name}
+                      </h4>
+                    </div>
+                    <span className="text-[11px] font-bold text-zinc-500">
+                      {completedInAisle}/{aisleItems.length} comprados
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                    {aisleItems.map((item, idx) => {
+                      const isChecked = !!checkedItems[item.raw];
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => toggleCheck(item.raw)}
+                          className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-2.5 select-none ${
+                            isChecked
+                              ? 'bg-zinc-100/60 dark:bg-zinc-900/40 border-zinc-200 dark:border-zinc-800/80 text-zinc-400 dark:text-zinc-500 line-through'
+                              : 'bg-white dark:bg-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 font-medium'
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded-md border flex items-center justify-center transition-colors shrink-0 ${
+                              isChecked
+                                ? 'bg-emerald-600 border-emerald-600 text-white'
+                                : 'border-zinc-300 dark:border-zinc-600'
+                            }`}
+                          >
+                            {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                          <span className="text-xs truncate">{item.text}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Other / Uncategorized items */}
+            {(selectedAisleFilter === 'all' || selectedAisleFilter === 'otros') && (
+              (() => {
+                const otherItems = groupedShoppingList.filter((i) => i.aisleId === 'otros');
+                if (otherItems.length === 0) return null;
+                return (
+                  <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">🛍️</span>
+                        <h4 className="text-xs font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
+                          Otros Artículos y Extras
+                        </h4>
+                      </div>
+                      <span className="text-[11px] font-bold text-zinc-500">
+                        {otherItems.filter((i) => checkedItems[i.raw]).length}/{otherItems.length}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      {otherItems.map((item, idx) => {
+                        const isChecked = !!checkedItems[item.raw];
+                        return (
+                          <div
+                            key={idx}
+                            onClick={() => toggleCheck(item.raw)}
+                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-2.5 select-none ${
+                              isChecked
+                                ? 'bg-zinc-100/60 dark:bg-zinc-900/40 border-zinc-200 dark:border-zinc-800/80 text-zinc-400 dark:text-zinc-500 line-through'
+                                : 'bg-white dark:bg-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 font-medium'
+                            }`}
+                          >
+                            <div
+                              className={`w-4 h-4 rounded-md border flex items-center justify-center transition-colors shrink-0 ${
+                                isChecked
+                                  ? 'bg-emerald-600 border-emerald-600 text-white'
+                                  : 'border-zinc-300 dark:border-zinc-600'
+                              }`}
+                            >
+                              {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                            </div>
+                            <span className="text-xs truncate">{item.text}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()
+            )}
+          </div>
+
           <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800 flex justify-between items-center text-xs text-zinc-500">
             <span>
-              {Object.values(checkedItems).filter(Boolean).length} de {allShoppingItems.length} artículos completados
+              {Object.values(checkedItems).filter(Boolean).length} de {groupedShoppingList.length} artículos completados
             </span>
             <button
               type="button"

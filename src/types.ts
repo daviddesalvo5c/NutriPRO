@@ -26,6 +26,11 @@ export interface UserProfile {
   targetCarbsGrams: number;
   targetFatGrams: number;
   
+  // Calorie Cycling / Flexible Social Day ("Día Social / Cheat Meal flexible")
+  calorieCyclingEnabled?: boolean;
+  weekdayReductionKcal?: number; // e.g. 150 kcal saved Mon-Fri
+  socialDays?: ('friday' | 'saturday' | 'sunday')[]; // days that receive the banked calories
+
   // Last updated timestamp
   updatedAt: string;
 }
@@ -115,7 +120,7 @@ export interface RecipeItem {
   tag: string;
 }
 
-export type SubscriptionTier = 'free' | 'pro_monthly' | 'pro_annual' | 'vip';
+export type SubscriptionTier = 'free' | 'pro_trial' | 'pro_monthly' | 'pro_annual' | 'vip';
 
 export interface SubscriptionTransaction {
   id: string;
@@ -136,6 +141,8 @@ export interface AuthUser {
   isFounder?: boolean;
   tier?: SubscriptionTier;
   subscribedAt?: string;
+  trialEndsAt?: string;
+  trialStartedAt?: string;
   createdAt: string;
 }
 
@@ -145,6 +152,8 @@ export interface UserSession {
   name: string;
   isFounder?: boolean;
   tier?: SubscriptionTier;
+  trialEndsAt?: string;
+  trialStartedAt?: string;
   loginTime?: string;
 }
 
@@ -177,11 +186,24 @@ export interface WorkoutItem {
 
 export interface ActivityDayLog {
   date: string; // YYYY-MM-DD
-  connectedService: 'google_fit' | null;
+  connectedService: 'google_fit' | 'strava' | 'health_connect' | null;
   syncedSteps: number;
   syncedCalories: number;
   lastSyncedAt?: string;
   workouts: WorkoutItem[];
+}
+
+export interface StravaActivity {
+  id: number;
+  name: string;
+  type: string;
+  distance: number; // meters
+  moving_time: number; // seconds
+  elapsed_time: number;
+  total_elevation_gain: number;
+  calories?: number;
+  start_date_local: string;
+  average_speed: number;
 }
 
 

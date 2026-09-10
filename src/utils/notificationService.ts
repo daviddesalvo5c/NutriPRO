@@ -61,6 +61,23 @@ class NotificationManager {
     this.notifyListeners();
   }
 
+  // Quick helper methods
+  success(message: string, title: string = 'Éxito'): string {
+    return this.addToast('success', title, message);
+  }
+
+  error(message: string, title: string = 'Error'): string {
+    return this.addToast('warning', title, message);
+  }
+
+  warning(message: string, title: string = 'Atención'): string {
+    return this.addToast('warning', title, message);
+  }
+
+  info(message: string, title: string = 'Información'): string {
+    return this.addToast('info', title, message);
+  }
+
   // -------------------------------------------------------------
   // SPECIFIC IN-APP NOTIFICATIONS
   // -------------------------------------------------------------

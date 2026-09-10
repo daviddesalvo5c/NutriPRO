@@ -17,14 +17,23 @@ import {
   AlertCircle,
   Scan,
   Camera,
-  Lock
+  Lock,
+  PartyPopper,
+  FileText,
+  ChefHat,
+  Trophy
 } from 'lucide-react';
-import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier } from '../types';
-import { getProfileCalculations, formatGrams, roundGrams } from '../utils/nutritionCalculations';
+import { DailyLog, FoodItem, MealType, UserProfile, SubscriptionTier, WeightEntry, BodyMeasurementEntry } from '../types';
+import { getProfileCalculations, formatGrams, roundGrams, getTargetCaloriesForDate } from '../utils/nutritionCalculations';
 import { WaterTrackerCard } from './WaterTrackerCard';
 import { hasUserProAccess, FOUNDER_EMAIL, FOUNDER_NAME } from '../utils/storage';
 import { AddArgentineFoodModal } from './AddArgentineFoodModal';
 import { EditFoodItemModal } from './EditFoodItemModal';
+import { SmartRemainingMealModal } from './SmartRemainingMealModal';
+import { MicronutrientAlertsCard } from './MicronutrientAlertsCard';
+import { StreakGamificationCard } from './StreakGamificationCard';
+import { CalorieCyclingModal } from './CalorieCyclingModal';
+import { NutritionReportModal } from './NutritionReportModal';
 
 interface DiarySectionProps {
   profile: UserProfile;
@@ -44,6 +53,9 @@ interface DiarySectionProps {
   currentTier?: SubscriptionTier;
   onOpenPlansModal?: () => void;
   onEditFoodItem?: (date: string, item: FoodItem) => void;
+  onUpdateProfile?: (updated: UserProfile) => void;
+  weightHistory?: WeightEntry[];
+  measurements?: BodyMeasurementEntry[];
 }
 
 export const DiarySection: React.FC<DiarySectionProps> = ({
@@ -64,9 +76,15 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   currentTier = 'free' as SubscriptionTier,
   onOpenPlansModal,
   onEditFoodItem,
+  onUpdateProfile,
+  weightHistory = [],
+  measurements = [],
 }) => {
   const [activeModalMeal, setActiveModalMeal] = useState<MealType | null>(null);
   const [editingItem, setEditingItem] = useState<FoodItem | null>(null);
+  const [isSmartMealModalOpen, setIsSmartMealModalOpen] = useState(false);
+  const [isCalorieCyclingOpen, setIsCalorieCyclingOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
 
   // Check 7-day history limit for Free users
   const isDateOlderThan7Days = (dateStr: string) => {
@@ -78,7 +96,8 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
     return diffDays > 6;
   };
 
-  const isHistoryLocked = !hasUserProAccess(userEmail, currentTier) && isDateOlderThan7Days(selectedDate);
+  const isProOrVip = hasUserProAccess(userEmail, currentTier);
+  const isHistoryLocked = !isProOrVip && isDateOlderThan7Days(selectedDate);
 
   // Quick add form state
   const [foodName, setFoodName] = useState('');
@@ -88,8 +107,8 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   const [carbs, setCarbs] = useState<number | ''>('');
   const [fat, setFat] = useState<number | ''>('');
 
-  // Calculations from the UserProfile
-  const profileCalcs = getProfileCalculations(profile);
+  // Dynamic calorie cycling (Día Social / Cheat Meal Flexible vs Días Regulares)
+  const cyclingInfo = getTargetCaloriesForDate(profile, selectedDate);
 
   // Active day's items
   const currentLog = dailyLogs[selectedDate] || { date: selectedDate, items: [] };
@@ -101,11 +120,11 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
   const totalCarbsConsumed = roundGrams(items.reduce((acc, i) => acc + (i.carbsGrams || 0), 0));
   const totalFatConsumed = roundGrams(items.reduce((acc, i) => acc + (i.fatGrams || 0), 0));
 
-  // Targets from Profile
-  const targetCalories = profileCalcs.targetCalories;
-  const targetProtein = roundGrams(profileCalcs.proteinGrams);
-  const targetCarbs = roundGrams(profileCalcs.carbsGrams);
-  const targetFat = roundGrams(profileCalcs.fatGrams);
+  // Targets from Profile adjusted by Calorie Cycling if enabled
+  const targetCalories = cyclingInfo.targetCalories;
+  const targetProtein = roundGrams(cyclingInfo.proteinGrams);
+  const targetCarbs = roundGrams(cyclingInfo.carbsGrams);
+  const targetFat = roundGrams(cyclingInfo.fatGrams);
 
   // Real-time activity discount logic
   const activeBurn = (discountActivityCalories && totalActivityBurned > 0) ? totalActivityBurned : 0;
@@ -257,6 +276,17 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             <span>Escanear IA</span>
           </button>
 
+          <button
+            type="button"
+            id="diary-btn-open-report"
+            onClick={() => setIsReportModalOpen(true)}
+            className="h-9 px-3 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700 shadow-xs transition-all hover:scale-[1.02] whitespace-nowrap"
+            title="Exportar informe nutricional en PDF para nutricionistas"
+          >
+            <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>Informe PDF</span>
+          </button>
+
           {/* Cerrar el Día button */}
           {onToggleCloseDay && (
             <button
@@ -336,6 +366,13 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
         </div>
       )}
 
+      {/* Streak & Consistency Gamification Card */}
+      <StreakGamificationCard
+        dailyLogs={dailyLogs}
+        profile={profile}
+        onOpenReport={() => setIsReportModalOpen(true)}
+      />
+
       {/* Main Calories & Macros Tracker Banner */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
@@ -369,6 +406,36 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
               )}
             </div>
 
+            {/* Calorie Cycling / Cheat Meal flexible info */}
+            {profile.calorieCyclingEnabled ? (
+              <div className="mt-2.5 flex items-center justify-between p-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                <span className={`inline-flex items-center gap-1 text-xs font-bold ${
+                  cyclingInfo.isSocialDay
+                    ? 'text-amber-800 dark:text-amber-300'
+                    : 'text-zinc-700 dark:text-zinc-300'
+                }`}>
+                  <PartyPopper className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  {cyclingInfo.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsCalorieCyclingOpen(true)}
+                  className="text-[11px] font-extrabold text-emerald-600 dark:text-emerald-400 hover:underline px-1.5 py-0.5"
+                >
+                  Ajustar
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsCalorieCyclingOpen(true)}
+                className="mt-2.5 text-[11px] text-zinc-500 hover:text-emerald-600 dark:text-zinc-400 dark:hover:text-emerald-400 font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                <PartyPopper className="w-3.5 h-3.5 text-amber-500" />
+                <span>Configurar Día Social / Cheat Meal flexible</span>
+              </button>
+            )}
+
             {/* Main Progress Bar */}
             <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-3.5 rounded-full overflow-hidden mt-3 p-0.5 border border-zinc-200 dark:border-zinc-700">
               <div
@@ -400,17 +467,28 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
 
           {/* 3 Macro Progress Bars */}
           <div className="md:col-span-7 space-y-3.5">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 Macronutrientes (adaptados a tu perfil)
               </span>
-              <button
-                onClick={onOpenProfile}
-                className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
-              >
-                Ajustar metas
-                <Edit3 className="w-3 h-3" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSmartMealModalOpen(true)}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-xs transition-all hover:scale-[1.02]"
+                  title="El asistente analiza tus macros restantes y te sugiere 2 o 3 platos rápidos"
+                >
+                  <Sparkles className="w-3 h-3 text-amber-300 animate-pulse" />
+                  <span>Armame una comida con lo que me queda</span>
+                </button>
+                <button
+                  onClick={onOpenProfile}
+                  className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
+                >
+                  Ajustar metas
+                  <Edit3 className="w-3 h-3" />
+                </button>
+              </div>
             </div>
 
             {/* Protein Progress */}
@@ -475,9 +553,28 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
                 />
               </div>
             </div>
+
+            {/* Quick action banner: Armame una comida con lo que me queda de macros */}
+            <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+              <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                Restan hoy: <strong className="text-zinc-900 dark:text-zinc-100 font-bold">{Math.max(0, caloriesRemaining)} kcal</strong> · {Math.max(0, targetProtein - totalProteinConsumed)}g P · {Math.max(0, targetCarbs - totalCarbsConsumed)}g C · {Math.max(0, targetFat - totalFatConsumed)}g G
+              </div>
+              <button
+                type="button"
+                id="diary-btn-smart-remaining-meal"
+                onClick={() => setIsSmartMealModalOpen(true)}
+                className="w-full sm:w-auto px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center justify-center gap-1.5 shadow-xs transition-all hover:scale-[1.02] shrink-0"
+              >
+                <ChefHat className="w-3.5 h-3.5 text-amber-300" />
+                <span>✦ Armame una comida con lo que me queda</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Alertas Inteligentes de Micronutrientes (Fibra, Hierro, Sodio, Hidratación) */}
+      <MicronutrientAlertsCard dailyLogs={dailyLogs} compact />
 
       {/* Daily Water Hydration Tracker Card */}
       <WaterTrackerCard
@@ -766,6 +863,45 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
           userEmail={userEmail}
         />
       )}
+
+      {/* Smart Remaining Meal Modal (Armame una comida con lo que me queda de macros) */}
+      <SmartRemainingMealModal
+        isOpen={isSmartMealModalOpen}
+        onClose={() => setIsSmartMealModalOpen(false)}
+        remainingCalories={Math.max(0, caloriesRemaining)}
+        remainingProtein={Math.max(0, targetProtein - totalProteinConsumed)}
+        remainingCarbs={Math.max(0, targetCarbs - totalCarbsConsumed)}
+        remainingFat={Math.max(0, targetFat - totalFatConsumed)}
+        targetCalories={targetCalories}
+        onSaveFoodItem={(item, mealType) => {
+          onAddFoodItem(selectedDate, { ...item, mealType });
+        }}
+        initialMealType={activeModalMeal || 'dinner'}
+        isProOrVip={isProOrVip}
+        onOpenPlansModal={onOpenPlansModal}
+      />
+
+      {/* Calorie Cycling Modal (Modo Día Social / Cheat Meal flexible) */}
+      <CalorieCyclingModal
+        isOpen={isCalorieCyclingOpen}
+        onClose={() => setIsCalorieCyclingOpen(false)}
+        profile={profile}
+        onUpdateProfile={(updated) => {
+          if (onUpdateProfile) {
+            onUpdateProfile(updated);
+          }
+        }}
+      />
+
+      {/* Nutrition Report Modal for Nutritionists / PDF Export */}
+      <NutritionReportModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        profile={profile}
+        dailyLogs={dailyLogs}
+        weightHistory={weightHistory || []}
+        measurements={measurements || []}
+      />
     </div>
   );
 };

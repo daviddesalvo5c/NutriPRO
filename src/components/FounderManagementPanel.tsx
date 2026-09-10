@@ -96,17 +96,26 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
   }, [currentUserEmail]);
 
   const handleGrantVip = async (email: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    // 1. Immediate optimistic UI update so mobile and desktop show VIP instantaneously
+    setUsers((prev) =>
+      prev.map((u) => (u.email.toLowerCase() === cleanEmail ? { ...u, tier: 'vip' } : u))
+    );
+    grantVipToUser(cleanEmail);
+
     setIsRefreshing(true);
     try {
-      const res = await supabaseGrantVip(email, currentUserEmail);
-      grantVipToUser(email);
+      const res = await supabaseGrantVip(cleanEmail, currentUserEmail);
       if (res.success) {
         setNotification({ type: 'success', message: res.message });
         setNewVipEmail('');
-        await refreshData();
       } else {
         setNotification({ type: 'error', message: res.message });
       }
+      await refreshData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err?.message || 'Error al otorgar VIP' });
+      await refreshData();
     } finally {
       setIsRefreshing(false);
     }
@@ -114,16 +123,25 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
   };
 
   const handleRevokeVip = async (email: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    // 1. Immediate optimistic UI update
+    setUsers((prev) =>
+      prev.map((u) => (u.email.toLowerCase() === cleanEmail ? { ...u, tier: 'free' } : u))
+    );
+    revokeVipFromUser(cleanEmail);
+
     setIsRefreshing(true);
     try {
-      const res = await supabaseRevokeVip(email, currentUserEmail);
-      revokeVipFromUser(email);
+      const res = await supabaseRevokeVip(cleanEmail, currentUserEmail);
       if (res.success) {
         setNotification({ type: 'success', message: res.message });
-        await refreshData();
       } else {
         setNotification({ type: 'error', message: res.message });
       }
+      await refreshData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err?.message || 'Error al revocar VIP' });
+      await refreshData();
     } finally {
       setIsRefreshing(false);
     }
@@ -525,8 +543,90 @@ export const FounderManagementPanel: React.FC<FounderManagementPanelProps> = ({
           </div>
         </div>
 
-        {/* Users Table */}
-        <div className="overflow-x-auto">
+        {/* Mobile View: Clean, tactile User Cards */}
+        <div className="block md:hidden divide-y divide-zinc-100 dark:divide-zinc-800">
+          {filteredUsers.length === 0 ? (
+            <div className="py-8 text-center text-zinc-400 text-xs">
+              No se encontraron usuarios con ese criterio.
+            </div>
+          ) : (
+            filteredUsers.map((u) => {
+              const isUserFounder = isFounderEmail(u.email);
+              const isUserVip = u.tier === 'vip' || isUserFounder;
+              const isUserPro = u.tier === 'pro_monthly' || u.tier === 'pro_annual';
+
+              return (
+                <div key={u.email} className="py-3 px-1 flex flex-col gap-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-bold text-xs text-zinc-900 dark:text-zinc-100 truncate">{u.name}</span>
+                        {isUserFounder && (
+                          <span className="px-1.5 py-0.2 rounded bg-amber-400 text-amber-950 font-black text-[9px] uppercase tracking-wider">
+                            Fundador
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-0.5">{u.email}</p>
+                    </div>
+                    <div>
+                      {isUserFounder ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-700 dark:text-amber-300 border border-amber-400/40 text-[10px] font-black">
+                          ✦ Fundador VIP
+                        </span>
+                      ) : isUserVip ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[10px] font-black shadow-xs">
+                          ✦ Miembro VIP
+                        </span>
+                      ) : isUserPro ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 text-[10px] font-bold">
+                          {u.tier === 'pro_annual' ? 'Pro Anual' : 'Pro Mensual'}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-[10px] font-bold">
+                          Plan Gratuito
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] text-zinc-400">
+                      Reg: {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'N/A'}
+                    </span>
+                    <div>
+                      {isUserFounder ? (
+                        <span className="text-[11px] text-zinc-400 italic">Inmutable</span>
+                      ) : isUserVip ? (
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeVip(u.email)}
+                          className="px-3 py-1.5 rounded-lg text-rose-600 active:bg-rose-100 dark:active:bg-rose-950/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-xs font-bold transition-all"
+                          title="Quitar rango VIP"
+                        >
+                          Revocar VIP
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleGrantVip(u.email)}
+                          className="px-3 py-1.5 rounded-lg bg-amber-400 active:bg-amber-600 hover:bg-amber-500 text-amber-950 text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
+                          title="Asignar acceso total gratuito"
+                        >
+                          <Crown className="w-3.5 h-3.5" />
+                          <span>Hacer VIP ✦</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop View: Full Table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-xs text-zinc-600 dark:text-zinc-400">
             <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-zinc-500 dark:text-zinc-400 uppercase text-[10px] font-black border-b border-zinc-200 dark:border-zinc-800">
               <tr>

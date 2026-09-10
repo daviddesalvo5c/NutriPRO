@@ -9,8 +9,8 @@
  * 1024 px de lado mayor es de sobra para identificar un plato.
  */
 
-const MAX_SIZE = 1024;
-const QUALITY = 0.72;
+const MAX_SIZE = 1280;
+const QUALITY = 0.85;
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {

@@ -68,10 +68,10 @@ app.get('/api/foods-search', async (req, res) => {
   }
 });
 
-// Real visual food analysis endpoint using Gemini Vision
+// Real visual food analysis endpoint using Gemini Vision with volumetric calibration
 app.post('/api/analyze-food', async (req, res) => {
   try {
-    const { image, mimeType = 'image/jpeg' } = req.body;
+    const { image, mimeType = 'image/jpeg', userHint = '', cookingMethod = '', portionContext = '' } = req.body;
 
     if (!image) {
       return res.status(400).json({ error: 'No image provided for visual analysis.' });
@@ -95,7 +95,7 @@ app.post('/api/analyze-food', async (req, res) => {
     if (!apiKey) {
       console.warn('GEMINI_API_KEY is not set. Returning a structured estimated response.');
       return res.json({
-        name: 'Plato Saludable Combinado',
+        name: userHint ? userHint.trim() : 'Plato Saludable Combinado',
         category: 'Almuerzo / Cena',
         weightGrams: 350,
         calories: 480,
@@ -114,6 +114,36 @@ app.post('/api/analyze-food', async (req, res) => {
 
     const ai = getGeminiClient();
 
+    const contextualClues = [
+      userHint ? `Pista explícita provista por el usuario: "${userHint}". Dale máxima prioridad a esta pista para identificar los ingredientes o plato.` : '',
+      cookingMethod ? `Método de cocción informado: "${cookingMethod}".` : '',
+      portionContext ? `Contexto de porción: "${portionContext}".` : '',
+    ].filter(Boolean).join('\n');
+
+    const promptText = `Eres un nutricionista clínico de máxima precisión y perito bromatológico especializado en visión por computadora para Argentina y gastronomía internacional.
+Tu objetivo es analizar la foto del plato o alimento y calcular con máxima exactitud en el PRIMER INTENTO:
+
+${contextualClues ? `=== CONTEXTO DEL USUARIO ===\n${contextualClues}\n===========================` : ''}
+
+PASO A PASO OBLIGATORIO DE ANÁLISIS FOTOGRÁFICO:
+1. IDENTIFICACIÓN Y RECONOCIMIENTO:
+   - Reconoce el plato específico (ej: "Milanesa de ternera al horno con puré de papas", "Bife de chorizo con ensalada mixta", "2 Empanadas de carne", "Tostadas integrales con palta y huevo poché", "Café con leche con medialuna", "Pollo grillado con arroz blanco y vegetales").
+   - Identifica si pertenece a la cocina argentina o internacional cotidiana.
+
+2. CALIBRACIÓN VOLUMÉTRICA Y TAMAÑO DE PORCIÓN (CRÍTICO):
+   - Observa la vajilla y referencias visuales: plato playo estándar (~24-26 cm de diámetro), plato hondo (~20 cm), bowl mediano (~400ml), taza de desayuno (~200-250ml), cubiertos o bordes.
+   - Si la comida ocupa medio plato playo, son aprox 200-250g. Si cubre todo el plato de forma abundante, son aprox 350-500g.
+   - No subestimes el peso neto comestible: la carne cocida pierde ~25% de agua respecto al peso crudo pero sigue pesando entre 150g y 250g por bife/pechuga. Los fideos o arroz cocido absorben agua y triplican su peso en seco (un plato típico cocido pesa 180-220g).
+
+3. ESTIMACIÓN DE GRASAS OCULTAS Y MÉTODOS DE COCCIÓN:
+   - Aceite de cocción, manteca en puré, rebozado frito vs al horno, quesos derretidos o salsas. Si se ve dorado brillante o frito, computar las grasas añadidas correspondientes (1 cucharada de aceite = 14g grasa = 126 kcal).
+
+4. COHERENCIA BROMATOLÓGICA Y MATEMÁTICA ATWATER:
+   - Las calorías deben reflejar la fórmula Atwater: Calorías ≈ (Proteína * 4) + (Carbohidratos * 4) + (Grasas * 9).
+   - Desglosa cada ingrediente visible con su peso exacto estimado en gramos (ej: "Bife de lomo cocido", "180g").
+
+Responde únicamente con el objeto JSON estructurado según el schema especificado.`;
+
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: {
@@ -125,18 +155,7 @@ app.post('/api/analyze-food', async (req, res) => {
             },
           },
           {
-            text: `Eres un nutricionista clínico de alta precisión y experto en análisis bromatológico y fotográfico de alimentos para Argentina y gastronomía internacional.
-Analiza la imagen proporcionada con un objetivo de acertividad mínimo del 95%.
-
-1. Identifica el nombre gastronómico preciso del plato o alimento en español rioplatense o estándar.
-2. Determina la categoría más apropiada.
-3. Estima el peso total neto servido en gramos de la porción visible con criterio profesional.
-4. Calcula las calorías totales estimadas (kcal).
-5. Calcula los gramos exactos de macronutrientes: proteína (g), carbohidratos (g) y grasas (g).
-   REGLA DE CONGRUENCIA MATEMÁTICA ATWATER OBLIGATORIA: (proteína * 4) + (carbohidratos * 4) + (grasas * 9) debe coincidir con las calorías totales con un margen de error inferior al 3%.
-6. Asigna el porcentaje de confianza estadística de detección y cálculo.
-7. Desglosa cada ingrediente individual visible con su nombre y peso estimado en gramos.
-8. Brinda un análisis bromatológico conciso (1 o 2 oraciones).`,
+            text: promptText,
           },
         ],
       },
@@ -179,7 +198,28 @@ Analiza la imagen proporcionada con un objetivo de acertividad mínimo del 95%.
     }
 
     const parsedData = JSON.parse(textOutput);
-    return res.json(parsedData);
+
+    // Verificación y balanceo matemático Atwater en el servidor para evitar discrepancias
+    const p = Math.round(Number(parsedData.protein) || 0);
+    const c = Math.round(Number(parsedData.carbs) || 0);
+    const f = Math.round(Number(parsedData.fat) || 0);
+    const atwaterCals = Math.round((p * 4) + (c * 4) + (f * 9));
+
+    // Si la discrepancia con las calorías reportadas supera el 6%, ajustar al balance Atwater exacto
+    let finalCalories = Math.round(Number(parsedData.calories) || 0);
+    if (Math.abs(finalCalories - atwaterCals) > (finalCalories * 0.06) && atwaterCals > 0) {
+      finalCalories = atwaterCals;
+    }
+
+    return res.json({
+      ...parsedData,
+      protein: p,
+      carbs: c,
+      fat: f,
+      calories: finalCalories,
+      weightGrams: Math.round(Number(parsedData.weightGrams) || 250),
+      confidence: Math.min(99, Math.max(70, Math.round(Number(parsedData.confidence) || 92))),
+    });
   } catch (error: any) {
     console.error('Error in /api/analyze-food:', error);
     return res.status(500).json({
@@ -557,7 +597,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Sincronización - PULL (SOLUCIÓN PARA BIOMETRÍA)
+// Sincronización - PULL (SOLUCIÓN PARA BIOMETRÍA Y VIP)
 app.get('/api/sync/pull', async (req, res) => {
   try {
     const email = req.query.email as string;
@@ -565,19 +605,31 @@ app.get('/api/sync/pull', async (req, res) => {
     if (!email) return res.status(400).json({ success: false, message: 'Email param required' });
     
     const cleanEmail = email.trim().toLowerCase();
+    const isFounder = cleanEmail === FOUNDER_EMAIL_LOWER;
     const userData = db.userData[cleanEmail] || {
       email: cleanEmail,
       name: cleanEmail.split('@')[0],
-      tier: 'free',
+      tier: isFounder ? 'vip' : 'free',
       dailyLogs: {},
       updatedAt: '1970-01-01T00:00:00.000Z',
     };
+
+    if (isFounder) {
+      userData.tier = 'vip';
+    }
 
     try {
       const supa = await pullUserFromSupabase(cleanEmail, explicitUserId);
       if (supa) {
         if (supa.profile) {
           userData.name = supa.profile.full_name || userData.name;
+          // Sync tier from Supabase profiles table
+          if (isFounder) {
+            userData.tier = 'vip';
+          } else if (supa.profile.subscription_plan) {
+            userData.tier = supa.profile.subscription_plan;
+          }
+
           const currentProfile = userData.profile || {};
           
           // SOLUCIÓN BIOMETRÍA: Evaluamos cada campo individualmente para no sobreescribir con defaults
@@ -597,6 +649,22 @@ app.get('/api/sync/pull', async (req, res) => {
             targetCarbsGrams: supa.profile.target_carbs !== null ? Number(supa.profile.target_carbs) : currentProfile.targetCarbsGrams,
             targetFatGrams: supa.profile.target_fat !== null ? Number(supa.profile.target_fat) : currentProfile.targetFatGrams,
           };
+        }
+
+        // Check if VIP in vip_invitations table
+        if (supabaseServer && userData.tier !== 'vip' && !isFounder) {
+          try {
+            const { data: vipRow } = await supabaseServer
+              .from('vip_invitations')
+              .select('email, status')
+              .eq('email', cleanEmail)
+              .maybeSingle();
+            if (vipRow && (vipRow.status === 'active' || !vipRow.status)) {
+              userData.tier = 'vip';
+            }
+          } catch (vipErr) {
+            // ignore
+          }
         }
 
         if (supa.foodRows && supa.foodRows.length > 0) {
@@ -627,6 +695,9 @@ app.get('/api/sync/pull', async (req, res) => {
           }
         }
         db.userData[cleanEmail] = userData;
+        if (db.users[cleanEmail]) {
+          db.users[cleanEmail].tier = userData.tier;
+        }
         saveSyncDatabase(db);
       }
     } catch (e) {
@@ -693,17 +764,111 @@ app.get('/api/founder/users', async (req, res) => {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && supaProfiles && supaProfiles.length > 0) {
-          const formatted = supaProfiles.map((p: any) => ({
-            id: p.id,
-            email: p.email,
-            name: p.full_name || p.name || p.email?.split('@')[0],
-            isFounder: p.email?.toLowerCase() === FOUNDER_EMAIL_LOWER || Boolean(p.is_founder),
-            tier: p.subscription_plan || (p.email?.toLowerCase() === FOUNDER_EMAIL_LOWER ? 'vip' : 'free'),
-            createdAt: p.created_at || new Date().toISOString(),
-          }));
-          return res.json({ success: true, users: formatted });
+        let vipEmailSet = new Set<string>();
+        try {
+          const { data: vipRows } = await supabaseServer
+            .from('vip_invitations')
+            .select('email, status');
+          if (vipRows && Array.isArray(vipRows)) {
+            vipEmailSet = new Set(
+              vipRows
+                .filter((v: any) => v.status === 'active' || !v.status)
+                .map((v: any) => String(v.email || '').trim().toLowerCase())
+            );
+          }
+        } catch {
+          // ignore
         }
+
+        const userMap: Record<string, any> = {};
+
+        if (!error && supaProfiles && supaProfiles.length > 0) {
+          supaProfiles.forEach((p: any) => {
+            const clean = String(p.email || '').trim().toLowerCase();
+            if (!clean) return;
+            const isFounder = clean === FOUNDER_EMAIL_LOWER || Boolean(p.is_founder);
+            const isVip = isFounder || p.subscription_plan === 'vip' || vipEmailSet.has(clean) || db.userData[clean]?.tier === 'vip';
+            const tier = isVip ? 'vip' : (p.subscription_plan || db.userData[clean]?.tier || 'free');
+
+            userMap[clean] = {
+              id: p.id,
+              email: clean,
+              name: p.full_name || p.name || clean.split('@')[0],
+              isFounder,
+              tier,
+              createdAt: p.created_at || new Date().toISOString(),
+            };
+          });
+        }
+
+        // Merge from local sync database
+        Object.values(db.userData || {}).forEach((u: any) => {
+          if (u?.email) {
+            const clean = u.email.trim().toLowerCase();
+            const isFounder = clean === FOUNDER_EMAIL_LOWER;
+            const isVip = isFounder || u.tier === 'vip' || vipEmailSet.has(clean);
+            if (!userMap[clean]) {
+              userMap[clean] = {
+                id: emailToUuid(clean),
+                email: clean,
+                name: u.name || clean.split('@')[0],
+                isFounder,
+                tier: isVip ? 'vip' : (u.tier || 'free'),
+                createdAt: u.updatedAt || new Date().toISOString(),
+              };
+            } else if (isVip && userMap[clean].tier !== 'vip') {
+              userMap[clean].tier = 'vip';
+            }
+          }
+        });
+
+        // Merge from registered users
+        Object.values(db.users || {}).forEach((u: any) => {
+          if (u?.email) {
+            const clean = u.email.trim().toLowerCase();
+            const isFounder = clean === FOUNDER_EMAIL_LOWER;
+            const isVip = isFounder || u.tier === 'vip' || vipEmailSet.has(clean);
+            if (!userMap[clean]) {
+              userMap[clean] = {
+                id: u.id || emailToUuid(clean),
+                email: clean,
+                name: u.name || clean.split('@')[0],
+                isFounder,
+                tier: isVip ? 'vip' : (u.tier || 'free'),
+                createdAt: u.createdAt || new Date().toISOString(),
+              };
+            } else if (isVip && userMap[clean].tier !== 'vip') {
+              userMap[clean].tier = 'vip';
+            }
+          }
+        });
+
+        // Include any VIP invited emails that may not yet be in profiles or userData
+        vipEmailSet.forEach((vEmail) => {
+          if (!userMap[vEmail]) {
+            userMap[vEmail] = {
+              id: emailToUuid(vEmail),
+              email: vEmail,
+              name: vEmail.split('@')[0],
+              isFounder: vEmail === FOUNDER_EMAIL_LOWER,
+              tier: 'vip',
+              createdAt: new Date().toISOString(),
+            };
+          }
+        });
+
+        // Always ensure founder is included
+        if (!userMap[FOUNDER_EMAIL_LOWER]) {
+          userMap[FOUNDER_EMAIL_LOWER] = {
+            email: FOUNDER_EMAIL_LOWER,
+            name: 'David De Salvo',
+            isFounder: true,
+            tier: 'vip',
+            createdAt: new Date().toISOString(),
+          };
+        }
+
+        return res.json({ success: true, users: Object.values(userMap) });
       } catch (e) {
         console.warn('Notice querying Supabase profiles in server:', e);
       }
@@ -799,10 +964,17 @@ app.post('/api/founder/users/grant-vip', async (req, res) => {
         await supabaseServer
           .from('vip_invitations')
           .upsert({ email: cleanTarget, status: 'active', invited_by: requester, updated_at: new Date().toISOString() }, { onConflict: 'email' });
+        
+        // Upsert into profiles table to guarantee subscription_plan is 'vip'
         await supabaseServer
           .from('profiles')
-          .update({ subscription_plan: 'vip', updated_at: new Date().toISOString() })
-          .eq('email', cleanTarget);
+          .upsert({
+            id: emailToUuid(cleanTarget),
+            email: cleanTarget,
+            full_name: cleanTarget.split('@')[0],
+            subscription_plan: 'vip',
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'email' });
       } catch (supaErr) {
         console.warn('Notice updating VIP in Supabase:', supaErr);
       }
@@ -1025,8 +1197,11 @@ app.all(['/api/google-fit/activity', '/api/google-fit/activity/'], async (req, r
       return res.status(400).json({ success: false, message: 'Access token de Google Fit requerido.' });
     }
 
-    const startDate = new Date(`${targetDateStr}T00:00:00.000`);
-    const endDate = new Date(`${targetDateStr}T23:59:59.999`);
+    // Support client-provided timezone timestamps (local midnight to end of day)
+    const startTimeMillis = Number(req.body?.startTimeMillis || req.query?.startTimeMillis) ||
+      new Date(`${targetDateStr}T00:00:00.000`).getTime();
+    const endTimeMillis = Number(req.body?.endTimeMillis || req.query?.endTimeMillis) ||
+      new Date(`${targetDateStr}T23:59:59.999`).getTime();
 
     const fitnessResponse = await fetch('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
       method: 'POST',
@@ -1036,12 +1211,14 @@ app.all(['/api/google-fit/activity', '/api/google-fit/activity/'], async (req, r
       },
       body: JSON.stringify({
         aggregateBy: [
+          { dataTypeName: 'com.google.step_count.delta', dataSourceId: 'derived:com.google.step_count.delta:com.google.android.gms:estimated_steps' },
           { dataTypeName: 'com.google.step_count.delta' },
+          { dataTypeName: 'com.google.calories.expended', dataSourceId: 'derived:com.google.calories.expended:com.google.android.gms:from_activities' },
           { dataTypeName: 'com.google.calories.expended' },
         ],
         bucketByTime: { durationMillis: 86400000 },
-        startTimeMillis: startDate.getTime(),
-        endTimeMillis: endDate.getTime(),
+        startTimeMillis,
+        endTimeMillis,
       }),
     });
 
@@ -1072,21 +1249,32 @@ app.all(['/api/google-fit/activity', '/api/google-fit/activity/'], async (req, r
     }
 
     const fitData = await fitnessResponse.json();
-    let totalSteps = 0;
-    let totalCalories = 0;
+    let estimatedSteps = 0;
+    let fallbackSteps = 0;
+    let activeCalories = 0;
+    let fallbackCalories = 0;
 
     if (fitData.bucket && fitData.bucket.length > 0) {
       for (const b of fitData.bucket) {
         if (b.dataset) {
           for (const ds of b.dataset) {
+            const dsId = ds.dataSourceId || '';
             if (ds.point) {
               for (const pt of ds.point) {
                 if (pt.dataTypeName === 'com.google.step_count.delta') {
                   const val = pt.value?.[0]?.intVal ?? pt.value?.[0]?.fpVal ?? 0;
-                  totalSteps += Math.round(Number(val));
+                  if (dsId.includes('estimated_steps') || pt.originDataSourceId?.includes('estimated_steps')) {
+                    estimatedSteps += Math.round(Number(val));
+                  } else {
+                    fallbackSteps += Math.round(Number(val));
+                  }
                 } else if (pt.dataTypeName === 'com.google.calories.expended') {
                   const cal = pt.value?.[0]?.fpVal ?? pt.value?.[0]?.intVal ?? 0;
-                  totalCalories += Math.round(Number(cal));
+                  if (dsId.includes('from_activities') || pt.originDataSourceId?.includes('from_activities')) {
+                    activeCalories += Math.round(Number(cal));
+                  } else {
+                    fallbackCalories += Math.round(Number(cal));
+                  }
                 }
               }
             }
@@ -1094,6 +1282,9 @@ app.all(['/api/google-fit/activity', '/api/google-fit/activity/'], async (req, r
         }
       }
     }
+
+    const totalSteps = estimatedSteps > 0 ? estimatedSteps : fallbackSteps;
+    const totalCalories = activeCalories > 0 ? activeCalories : fallbackCalories;
 
     return res.json({
       success: true,
@@ -1106,6 +1297,317 @@ app.all(['/api/google-fit/activity', '/api/google-fit/activity/'], async (req, r
     console.error('[GoogleFit Server] Internal error:', err);
     return res.status(500).json({ success: false, message: err.message || 'Error consultando actividad física.' });
   }
+});
+
+// -------------------------------------------------------------
+// AI Assistant: Generate Meal with Remaining Macros
+// -------------------------------------------------------------
+app.post('/api/generate-remaining-meal', async (req, res) => {
+  try {
+    const { 
+      remainingCalories = 400, 
+      remainingProtein = 30, 
+      remainingCarbs = 35, 
+      remainingFat = 12, 
+      mealType = 'dinner',
+      dietaryNotes = '' 
+    } = req.body || {};
+
+    const safeCals = Math.max(80, Math.round(Number(remainingCalories)));
+    const safeProt = Math.max(5, Math.round(Number(remainingProtein)));
+    const safeCarbs = Math.max(0, Math.round(Number(remainingCarbs)));
+    const safeFat = Math.max(0, Math.round(Number(remainingFat)));
+
+    const mealLabelMap: Record<string, string> = {
+      breakfast: 'Desayuno',
+      lunch: 'Almuerzo',
+      snacks: 'Merienda',
+      dinner: 'Cena',
+    };
+    const mealLabel = mealLabelMap[mealType] || 'Comida';
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (apiKey) {
+      try {
+        const client = getGeminiClient();
+        const prompt = `Eres un chef nutricionista deportivo de precisión en Argentina.
+El usuario necesita completar sus macros del día con una comida de tipo: "${mealLabel}".
+Presupuesto EXACTO disponible para este plato:
+- Calorías: ${safeCals} kcal
+- Proteína: ${safeProt} g
+- Carbohidratos: ${safeCarbs} g
+- Grasas: ${safeFat} g
+${dietaryNotes ? `Preferencias: ${dietaryNotes}` : ''}
+
+Requisitos estrictos:
+1. Diseña exactamente 3 opciones de platos diferentes, rápidos de preparar (<15 min) y con ingredientes cotidianos y accesibles (huevos, pollo, carne magra, atún, arroz, avena, papas, zapallito, tomate, queso port salut o descremado, yogur, frutas, etc.).
+2. La suma de macros de cada plato debe aproximarse de forma muy fiel (+-10%) al presupuesto restante (${safeCals} kcal, ${safeProt}g proteína, ${safeCarbs}g carbos, ${safeFat}g grasas).
+3. Detalla gramos precisos de cada ingrediente para que el usuario pueda pesarlo en la balanza de cocina.
+
+Responde ÚNICAMENTE en formato JSON con la siguiente estructura:
+{
+  "options": [
+    {
+      "id": "sug-1",
+      "title": "Nombre atractivo del plato",
+      "prepTimeMinutes": 10,
+      "difficulty": "Fácil",
+      "amountGrams": 300,
+      "calories": ${safeCals},
+      "proteinGrams": ${safeProt},
+      "carbsGrams": ${safeCarbs},
+      "fatGrams": ${safeFat},
+      "portionDescription": "1 porción completa",
+      "ingredients": [
+        { "name": "Pechuga de pollo", "amount": "150g" },
+        { "name": "Arroz cocido", "amount": "100g" }
+      ],
+      "instructions": [
+        "Paso 1 breve y directo",
+        "Paso 2"
+      ],
+      "chefTip": "Consejo nutricional o de condimento"
+    }
+  ]
+}`;
+
+        const geminiResponse = await client.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.3,
+          },
+        });
+
+        const rawText = geminiResponse.text?.trim() || '{}';
+        const parsed = JSON.parse(rawText);
+        if (parsed.options && Array.isArray(parsed.options) && parsed.options.length > 0) {
+          return res.json({ success: true, source: 'gemini_ai', options: parsed.options });
+        }
+      } catch (geminiError) {
+        console.warn('[SmartMeal AI] Error calling Gemini, falling back to heuristic generator:', geminiError);
+      }
+    }
+
+    // High quality heuristic generator with real Argentine ingredients tailored to macros
+    const heuristicOptions = [
+      {
+        id: `sug-${Date.now()}-1`,
+        title: `Omelette Proteico de Claras y Queso con Tostadas`,
+        prepTimeMinutes: 8,
+        difficulty: 'Rápido (8 min)',
+        amountGrams: 280,
+        calories: safeCals,
+        proteinGrams: safeProt,
+        carbsGrams: safeCarbs,
+        fatGrams: safeFat,
+        portionDescription: '1 plato completo',
+        ingredients: [
+          { name: 'Claras de huevo (o 1 huevo + 3 claras)', amount: `${Math.round(safeProt * 3.8)}ml` },
+          { name: 'Queso magro / Port Salut light', amount: `${Math.round(Math.max(20, safeFat * 3.5))}g` },
+          { name: 'Pan integral o galletas de arroz', amount: `${Math.round(Math.max(25, safeCarbs * 1.8))}g` },
+          { name: 'Tomate cherry u orégano', amount: 'Al gusto' },
+        ],
+        instructions: [
+          'Bate las claras con sal, pimienta y orégano.',
+          'Vierte en una sartén antiadherente caliente con rocío vegetal a fuego medio.',
+          'Agrega los cubitos de queso, dobla a la mitad y acompaña con las tostadas.',
+        ],
+        chefTip: 'Si te sobran pocos carbohidratos, reemplaza el pan por hojas verdes con gotas de limón.',
+      },
+      {
+        id: `sug-${Date.now()}-2`,
+        title: `Bowl Rápido de Atún al Natural, Arroz y Huevo`,
+        prepTimeMinutes: 5,
+        difficulty: 'Express (5 min)',
+        amountGrams: 320,
+        calories: Math.round(safeCals * 0.98),
+        proteinGrams: safeProt,
+        carbsGrams: safeCarbs,
+        fatGrams: safeFat,
+        portionDescription: '1 bowl mediano',
+        ingredients: [
+          { name: 'Atún al natural escurrido', amount: `${Math.round(safeProt * 3.5)}g` },
+          { name: 'Arroz blanco o integral cocido', amount: `${Math.round(Math.max(30, safeCarbs * 3.4))}g` },
+          { name: 'Huevo duro picado o palta', amount: `${Math.round(Math.max(15, safeFat * 3))}g` },
+          { name: 'Pizca de sal marina y gotas de limón', amount: 'Al gusto' },
+        ],
+        instructions: [
+          'Coloca en un bowl el arroz cocido.',
+          'Desmenuza la lata de atún al natural por encima.',
+          'Agrega el huevo o trozos de palta para completar las grasas saludables y mezcla bien.',
+        ],
+        chefTip: 'El atún al natural aporta casi 100% proteína limpia con 0 carbohidratos.',
+      },
+      {
+        id: `sug-${Date.now()}-3`,
+        title: `Bife Magro a la Plancha con Ensalada Fresca`,
+        prepTimeMinutes: 12,
+        difficulty: 'Fácil (12 min)',
+        amountGrams: 340,
+        calories: Math.round(safeCals * 1.02),
+        proteinGrams: safeProt,
+        carbsGrams: safeCarbs,
+        fatGrams: safeFat,
+        portionDescription: '1 bife con guarnición',
+        ingredients: [
+          { name: 'Bife de cuadril / bola de lomo o pechuga', amount: `${Math.round(safeProt * 4.2)}g` },
+          { name: 'Papa hervida o choclo', amount: `${Math.round(Math.max(30, safeCarbs * 4.5))}g` },
+          { name: 'Aceite de oliva virgen extra', amount: `${Math.round(Math.max(3, safeFat * 0.8))}ml` },
+          { name: 'Mix de hojas verdes o tomate', amount: '100g' },
+        ],
+        instructions: [
+          'Calienta la plancha o sartén a fuego fuerte.',
+          'Sella el bife 3-4 minutos por lado hasta el punto deseado con sal y pimienta.',
+          'Sirve junto a la papa o guarnición y aliña con el aceite medido.',
+        ],
+        chefTip: 'La carne roja magra te ayuda a cubrir el requerimiento de hierro y zinc del día.',
+      },
+    ];
+
+    return res.json({ success: true, source: 'heuristic_fallback', options: heuristicOptions });
+  } catch (err: any) {
+    console.error('[GenerateRemainingMeal] Error:', err);
+    return res.status(500).json({ success: false, message: err?.message || 'Error al generar comida con macros.' });
+  }
+});
+
+// -------------------------------------------------------------
+// Strava Integration & Webhooks
+// -------------------------------------------------------------
+// Token exchange with Strava OAuth
+app.post('/api/strava/token-exchange', async (req, res) => {
+  try {
+    const { code, clientId, clientSecret } = req.body || {};
+    const cid = clientId || process.env.STRAVA_CLIENT_ID;
+    const csecret = clientSecret || process.env.STRAVA_CLIENT_SECRET;
+
+    if (!code) {
+      return res.status(400).json({ success: false, message: 'Código de autorización de Strava requerido.' });
+    }
+
+    if (!cid || !csecret) {
+      // Mock friendly development response if keys are pending
+      return res.json({
+        success: true,
+        mock: true,
+        accessToken: 'mock_strava_access_token_' + Date.now(),
+        refreshToken: 'mock_strava_refresh_token',
+        expiresAt: Math.floor(Date.now() / 1000) + 21600,
+        athlete: {
+          id: 998877,
+          firstname: 'Atleta',
+          lastname: 'Strava',
+        },
+        notice: 'Conexión simulada con Strava lista. Para conectar tu app oficial de Strava, añade STRAVA_CLIENT_ID y STRAVA_CLIENT_SECRET.',
+      });
+    }
+
+    const stravaRes = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: cid,
+        client_secret: csecret,
+        code,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const data = await stravaRes.json();
+    if (stravaRes.ok && data.access_token) {
+      return res.json({
+        success: true,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt: data.expires_at,
+        athlete: data.athlete,
+      });
+    }
+
+    return res.status(400).json({ success: false, message: data.message || 'Error autorizando con Strava.' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error en token exchange de Strava.' });
+  }
+});
+
+// Fetch activities from Strava
+app.post('/api/strava/activities', async (req, res) => {
+  try {
+    const { accessToken, targetDate } = req.body || {};
+
+    if (!accessToken) {
+      return res.status(400).json({ success: false, message: 'Access token de Strava requerido.' });
+    }
+
+    // If mock token or test
+    if (accessToken.startsWith('mock_strava')) {
+      const today = targetDate || new Date().toISOString().split('T')[0];
+      return res.json({
+        success: true,
+        activities: [
+          {
+            id: 1001,
+            name: 'Entrenamiento Fondo Ciclismo',
+            type: 'Ride',
+            distance: 28400, // 28.4 km
+            moving_time: 3900, // 65 min
+            elapsed_time: 4200,
+            total_elevation_gain: 180,
+            calories: 620,
+            start_date_local: `${today}T10:30:00Z`,
+            average_speed: 7.28,
+          },
+          {
+            id: 1002,
+            name: 'Running Matutino 5K',
+            type: 'Run',
+            distance: 5100, // 5.1 km
+            moving_time: 1680, // 28 min
+            elapsed_time: 1720,
+            total_elevation_gain: 35,
+            calories: 340,
+            start_date_local: `${today}T07:45:00Z`,
+            average_speed: 3.03,
+          },
+        ],
+      });
+    }
+
+    const stravaRes = await fetch('https://www.strava.com/api/v3/athlete/activities?per_page=15', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!stravaRes.ok) {
+      return res.status(stravaRes.status).json({ success: false, message: 'Error consultando actividades de Strava.' });
+    }
+
+    const activities = await stravaRes.json();
+    return res.json({ success: true, activities });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Error al obtener entrenamientos de Strava.' });
+  }
+});
+
+// Strava Webhook Handlers
+app.get('/api/strava/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  console.log('[Strava Webhook Subscription Verify] challenge received:', challenge);
+  if (mode === 'subscribe') {
+    return res.json({ 'hub.challenge': challenge });
+  }
+  return res.status(400).send('Bad Request');
+});
+
+app.post('/api/strava/webhook', (req, res) => {
+  console.log('[Strava Webhook Event Received]:', req.body);
+  // Strava requires 200 OK within 2 seconds
+  res.status(200).send('EVENT_RECEIVED');
 });
 
 // Vite server integration

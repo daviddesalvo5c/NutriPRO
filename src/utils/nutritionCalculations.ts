@@ -273,3 +273,94 @@ export function roundGrams(value: number | undefined | null, maxDecimals: number
   return Number(Number(value).toFixed(maxDecimals));
 }
 
+export interface CalorieCyclingDayInfo {
+  targetCalories: number;
+  isSocialDay: boolean;
+  adjustmentKcal: number;
+  label: string;
+  dayOfWeek: string;
+  proteinGrams: number;
+  carbsGrams: number;
+  fatGrams: number;
+}
+
+/**
+ * Calculates adaptive target calories for a specific date considering Calorie Cycling / Flexible Social Days.
+ * Non-social days shave a slight deficit (e.g., -150 kcal), banking them for designated social days (e.g., Saturday +750 kcal)
+ * so the total weekly deficit/average remains 100% unchanged.
+ */
+export function getTargetCaloriesForDate(profile: UserProfile, dateString: string): CalorieCyclingDayInfo {
+  const calcs = getProfileCalculations(profile);
+  const baseTarget = calcs.targetCalories;
+
+  if (!profile.calorieCyclingEnabled) {
+    return {
+      targetCalories: baseTarget,
+      isSocialDay: false,
+      adjustmentKcal: 0,
+      label: 'Meta Estándar',
+      dayOfWeek: 'standard',
+      proteinGrams: calcs.proteinGrams,
+      carbsGrams: calcs.carbsGrams,
+      fatGrams: calcs.fatGrams,
+    };
+  }
+
+  const socialDays = profile.socialDays && profile.socialDays.length > 0 
+    ? profile.socialDays 
+    : ['saturday'];
+  const weekdayReduction = profile.weekdayReductionKcal && profile.weekdayReductionKcal > 0
+    ? profile.weekdayReductionKcal
+    : 150;
+
+  const dateObj = new Date(`${dateString}T12:00:00`);
+  const dayIndex = dateObj.getDay(); // 0: Sunday, 1: Monday, ... 5: Friday, 6: Saturday
+  
+  const dayNameMap: Record<number, 'sunday' | 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday'> = {
+    0: 'sunday',
+    1: 'monday',
+    2: 'tuesday',
+    3: 'wednesday',
+    4: 'thursday',
+    5: 'friday',
+    6: 'saturday',
+  };
+  const currentDayName = dayNameMap[dayIndex];
+
+  const socialDaysCount = socialDays.length;
+  const nonSocialDaysCount = 7 - socialDaysCount;
+  const totalBanked = weekdayReduction * nonSocialDaysCount;
+  const bufferPerSocialDay = Math.round(totalBanked / socialDaysCount);
+
+  const isSocial = socialDays.includes(currentDayName as any);
+
+  let targetCalories = baseTarget;
+  let adjustmentKcal = 0;
+  let label = 'Día Regular (Ahorro Colchón)';
+
+  if (isSocial) {
+    targetCalories = baseTarget + bufferPerSocialDay;
+    adjustmentKcal = bufferPerSocialDay;
+    label = `Día Social Flexible (+${bufferPerSocialDay} kcal colchón)`;
+  } else {
+    targetCalories = Math.max(1100, baseTarget - weekdayReduction);
+    adjustmentKcal = -weekdayReduction;
+    label = `Día Laboral (-${weekdayReduction} kcal reservadas)`;
+  }
+
+  // Calculate proportional macros for this day's calorie budget
+  const suggestedMacros = calculateSuggestedMacros(targetCalories, profile.weightKg, profile.goal);
+
+  return {
+    targetCalories,
+    isSocialDay: isSocial,
+    adjustmentKcal,
+    label,
+    dayOfWeek: currentDayName,
+    proteinGrams: suggestedMacros.proteinGrams,
+    carbsGrams: suggestedMacros.carbsGrams,
+    fatGrams: suggestedMacros.fatGrams,
+  };
+}
+
+

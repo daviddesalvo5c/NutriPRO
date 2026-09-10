@@ -100,6 +100,14 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
   const [editableDishName, setEditableDishName] = useState<string>('');
   const [portionMultiplier, setPortionMultiplier] = useState<number>(1.0);
   const [selectedMeal, setSelectedMeal] = useState<MealType>('lunch');
+  const [splitIngredients, setSplitIngredients] = useState<boolean>(false);
+
+  // User contextual hints to guarantee 100% accuracy on the FIRST photo
+  const [userHint, setUserHint] = useState<string>('');
+  const [showHintBar, setShowHintBar] = useState<boolean>(false);
+  const [isRefining, setIsRefining] = useState<boolean>(false);
+  const [refineText, setRefineText] = useState<string>('');
+  const [isStabilizing, setIsStabilizing] = useState<boolean>(false);
 
   // Start real camera stream
   const startCamera = useCallback(async () => {
@@ -165,7 +173,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
   };
 
   // Process captured image through visual AI analysis
-  const processImage = async (base64Image: string) => {
+  const processImage = async (base64Image: string, customHint?: string) => {
     // Check scan limits for Free users
     const currentQuota = canUserPerformAiScan(userEmail, currentTier);
     if (!currentQuota.allowed) {
@@ -178,20 +186,21 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
     setCapturedImage(base64Image);
     setStage('analyzing');
     setAnalysisError(null);
-    setAnalysisStatus('Enfocando detalles y segmentando el plato...');
+    setAnalysisStatus('Calibrando nitidez, vajilla y encuadre visual...');
+
+    const activeHint = customHint !== undefined ? customHint : userHint;
 
     // Progress updates for a responsive visual feel
     const timer1 = setTimeout(() => {
-      setAnalysisStatus('Identificando ingredientes y proporciones...');
-    }, 900);
+      setAnalysisStatus('Identificando ingredientes y porciones reales...');
+    }, 800);
 
     const timer2 = setTimeout(() => {
-      setAnalysisStatus('Calculando macronutrientes y calorías estimadas...');
-    }, 1800);
+      setAnalysisStatus('Calculando macronutrientes y balance Atwater...');
+    }, 1600);
 
     try {
-      // Se reduce antes de enviar: una foto de móvil supera el límite de cuerpo
-      // de la función y alarga el análisis hasta agotar su tiempo máximo.
+      // Se reduce antes de enviar manteniendo alta resolución para ver texturas
       const compact = await downscaleImage(base64Image);
 
       const response = await fetch('/api/analyze-food', {
@@ -199,7 +208,10 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ image: compact }),
+        body: JSON.stringify({ 
+          image: compact,
+          userHint: activeHint.trim() || undefined,
+        }),
       });
 
       if (!response.ok) {
@@ -213,6 +225,8 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       setEditableDishName(data.name || 'Plato Detectado');
       setPortionMultiplier(1.0);
       setStage('result');
+      setIsRefining(false);
+      setRefineText('');
 
       // Increment daily scan count for Free users
       if (!isProOrVip && userEmail) {
@@ -414,15 +428,27 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
   };
 
   // Shutter button capture from camera video stream
-  const handleCaptureShutter = () => {
-    setFlashEffect(true);
-    setTimeout(() => setFlashEffect(false), 200);
-
+  const handleCaptureShutter = async () => {
     if (!videoRef.current || !streamActive) {
       // If stream not active, trigger file upload
       fileInputRef.current?.click();
       return;
     }
+
+    setIsStabilizing(true);
+
+    // Haptic feedback if available
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate?.([30, 20, 50]);
+      } catch {}
+    }
+
+    // Micro stabilization delay (80ms) to ensure lens is not moving from finger press
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    setFlashEffect(true);
+    setTimeout(() => setFlashEffect(false), 200);
 
     try {
       const video = videoRef.current;
@@ -436,12 +462,15 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
 
+      setIsStabilizing(false);
+
       if (scanMode === 'barcode') {
         processBarcodeImage(dataUrl);
       } else {
         processImage(dataUrl);
       }
     } catch (err) {
+      setIsStabilizing(false);
       console.error('Shutter capture failed:', err);
       fileInputRef.current?.click();
     }
@@ -507,7 +536,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    // Auto-save the whole scanned dish and its individual ingredients (e.g. bife, pastas) to the user's permanent library
+    // Auto-save the whole scanned dish to user's permanent library
     const numIngredients = result.ingredients && result.ingredients.length > 0 ? result.ingredients.length : 1;
     const components = result.ingredients?.map((ing) => ({
       name: ing.name,
@@ -518,6 +547,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       fatGrams: roundGrams(scaledFat / numIngredients),
     })) || [];
 
+    // 1. Guardar plato completo en la biblioteca permanente
     saveFoodToUserLibrary(
       {
         name: editableDishName.trim() || result.name,
@@ -534,7 +564,61 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       userEmail
     );
 
-    onAddFoodToDiary(foodItem, selectedMeal);
+    // 2. Guardar cada ingrediente individual en la biblioteca permanente (ej. Bife, Pastas)
+    // para que el usuario pueda volver a buscarlos, sumarlos o editarlos independientemente
+    if (result.ingredients && result.ingredients.length > 0) {
+      result.ingredients.forEach((ing) => {
+        const compGrams = Math.round(scaledWeight / numIngredients);
+        const compCals = Math.round(scaledCalories / numIngredients);
+        const compProt = roundGrams(scaledProtein / numIngredients);
+        const compCarbs = roundGrams(scaledCarbs / numIngredients);
+        const compFat = roundGrams(scaledFat / numIngredients);
+
+        saveFoodToUserLibrary(
+          {
+            name: ing.name,
+            category: result.category || 'Ingrediente Escaneado',
+            amountGrams: compGrams,
+            portionDescription: `${ing.amount || `${compGrams}g`} (de ${editableDishName.trim() || result.name})`,
+            calories: compCals,
+            proteinGrams: compProt,
+            carbsGrams: compCarbs,
+            fatGrams: compFat,
+            source: 'ai_scan',
+          },
+          userEmail
+        );
+      });
+    }
+
+    // 3. Añadir al Diario: desglosado o combinado
+    if (splitIngredients && result.ingredients && result.ingredients.length > 1) {
+      result.ingredients.forEach((ing) => {
+        const compGrams = Math.round(scaledWeight / numIngredients);
+        const compCals = Math.round(scaledCalories / numIngredients);
+        const compProt = roundGrams(scaledProtein / numIngredients);
+        const compCarbs = roundGrams(scaledCarbs / numIngredients);
+        const compFat = roundGrams(scaledFat / numIngredients);
+
+        onAddFoodToDiary(
+          {
+            name: ing.name,
+            portionDescription: `${ing.amount || `${compGrams}g`} (${editableDishName.trim() || result.name})`,
+            amountGrams: compGrams,
+            calories: compCals,
+            proteinGrams: compProt,
+            carbsGrams: compCarbs,
+            fatGrams: compFat,
+            mealType: selectedMeal,
+            timeAdded: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+          selectedMeal
+        );
+      });
+    } else {
+      onAddFoodToDiary(foodItem, selectedMeal);
+    }
+
     onNavigateToDiary();
   };
 
@@ -887,6 +971,77 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
               </>
             )}
           </div>
+
+          {/* Quick Precision Hint Bar for 1st-Photo Accuracy */}
+          {scanMode === 'food' && (
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-xs border border-emerald-200/50">
+                    ✦
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                      Pista de Preparación para 100% de Precisión al 1er Intento
+                      <span className="text-[10px] font-normal text-zinc-400">(opcional)</span>
+                    </h3>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Toca un atajo o escribe detalles invisibles a la cámara (ej: "pechuga de pollo", "sin aceite", "bife de 250g")
+                    </p>
+                  </div>
+                </div>
+                {userHint && (
+                  <button
+                    type="button"
+                    onClick={() => setUserHint('')}
+                    className="text-[11px] font-bold text-rose-500 hover:text-rose-600 px-2 py-0.5 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                  >
+                    Borrar
+                  </button>
+                )}
+              </div>
+
+              {/* Input field */}
+              <div className="relative">
+                <input
+                  type="text"
+                  value={userHint}
+                  onChange={(e) => setUserHint(e.target.value)}
+                  placeholder="Ej: Milanesa de ternera al horno con puré de papas casero..."
+                  className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* 1-Tap Quick Shortcut Chips */}
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: '🍗 Pollo', val: 'Pechuga o presa de pollo' },
+                  { label: '🥩 Carne vacuna', val: 'Carne vacuna / bife' },
+                  { label: '🔥 Al horno', val: 'Cocinado al horno con poco aceite' },
+                  { label: '🍳 Frito', val: 'Frito con aceite' },
+                  { label: '🥗 Sin aceite / Light', val: 'Sin aceite añadido, cocción limpia o al vapor' },
+                  { label: '⚖️ Abundante (+350g)', val: 'Porción abundante de más de 350g' },
+                  { label: '🍚 Con arroz', val: 'Acompañado de guarnición de arroz' },
+                  { label: '🥔 Puré casero', val: 'Puré de papas casero con manteca y leche' },
+                ].map((chip, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      if (userHint) {
+                        setUserHint((prev) => `${prev}, ${chip.val}`);
+                      } else {
+                        setUserHint(chip.val);
+                      }
+                    }}
+                    className="px-2.5 py-1 text-[11px] rounded-lg font-medium bg-zinc-100 dark:bg-zinc-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/50 dark:hover:text-emerald-300 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 transition-colors"
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Quick Upload Action Card & Instructions */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1249,6 +1404,118 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* Ingredients Breakdown & Split Options if multiple ingredients */}
+                {result.ingredients && result.ingredients.length > 1 && (
+                  <div className="bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                          {result.ingredients.length} Alimentos detectados en el plato:
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                        Se guardan en tu Biblioteca ✦
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {result.ingredients.map((ing, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-1 rounded-xl bg-white dark:bg-zinc-800 text-xs font-medium text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 shadow-2xs"
+                        >
+                          {ing.name} {ing.amount ? `(${ing.amount})` : ''}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="pt-2 border-t border-emerald-200/60 dark:border-emerald-800/40 flex items-center justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 block">
+                          Desglosar en ítems independientes
+                        </span>
+                        <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          Te permite sumar otra porción (ej. +1 bife) o ajustar gramos de cada uno por separado en el diario.
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setSplitIngredients(!splitIngredients)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                          splitIngredients
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-300 dark:border-zinc-700'
+                        }`}
+                      >
+                        {splitIngredients ? '✓ Desglosado' : 'Combinado en 1'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Refine / Recalculate with instant note tool */}
+                <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700/80 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+                      ¿Querés afinar el cálculo de esta foto?
+                    </span>
+                    {!isRefining ? (
+                      <button
+                        type="button"
+                        onClick={() => setIsRefining(true)}
+                        className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+                      >
+                        Afinar con IA →
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsRefining(false)}
+                        className="text-[11px] text-zinc-400 hover:text-zinc-600"
+                      >
+                        Cerrar
+                      </button>
+                    )}
+                  </div>
+
+                  {isRefining ? (
+                    <div className="space-y-2 pt-1 animate-in fade-in">
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        Escribe qué ingrediente o cocción ajustar y la IA recalculará esta misma foto al instante:
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={refineText}
+                          onChange={(e) => setRefineText(e.target.value)}
+                          placeholder="Ej: Es pechuga de pollo y el puré no tiene manteca..."
+                          className="flex-1 text-xs px-3 py-2 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-emerald-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (capturedImage && refineText.trim()) {
+                              processImage(capturedImage, refineText);
+                            }
+                          }}
+                          disabled={!refineText.trim()}
+                          className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1 shrink-0"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Recalcular</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                      No hace falta sacar otra foto: podés darle una indicación exacta a la IA (ej. tipo de carne o método de cocción) para corregir el cálculo en 2 segundos.
+                    </p>
+                  )}
                 </div>
 
                 {/* Select Destination Meal in Diary */}

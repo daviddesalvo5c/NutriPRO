@@ -21,6 +21,7 @@ import {
   supabaseUpdateWater,
   supabaseSaveUserProfile,
   supabaseFetchUserProfile,
+  supabaseCheckUserSubscription,
   supabaseSubscribeToUserData,
   emailToUuid,
   isSupabaseConfigured
@@ -60,6 +61,7 @@ import {
   saveThemePreference,
   getUserTier,
   setUserTier,
+  grantVipToUser,
   recordSubscriptionTransaction,
   loadActivityLogsForUser,
   saveActivityLogsForUser,
@@ -262,6 +264,19 @@ export default function App() {
     setProgressPhotos(userPhotos);
     setCurrentTier(getUserTier(email));
 
+    // Subscription & VIP tier synchronization from Supabase / Cloud
+    supabaseCheckUserSubscription(email, userId)
+      .then((remoteTier) => {
+        if (remoteTier) {
+          setCurrentTier(remoteTier);
+          setUserTier(email, remoteTier);
+          if (remoteTier === 'vip') {
+            grantVipToUser(email);
+          }
+        }
+      })
+      .catch(() => {});
+
     // 2. 100% Automatic Native Supabase Fetch (Mobile ↔ PC automatic data hydration)
     if (isSupabaseConfigured) {
       supabaseFetchDailyLogs(email, userId)
@@ -396,6 +411,17 @@ export default function App() {
     setMeasurements(userMeasurements);
     setProgressPhotos(userPhotos);
     setCurrentTier(getUserTier(newSession.email));
+    supabaseCheckUserSubscription(newSession.email, newSession.userId)
+      .then((remoteTier) => {
+        if (remoteTier) {
+          setCurrentTier(remoteTier);
+          setUserTier(newSession.email, remoteTier);
+          if (remoteTier === 'vip') {
+            grantVipToUser(newSession.email);
+          }
+        }
+      })
+      .catch(() => {});
     setActiveTab('diary');
 
     // Trigger in-app notification & optional browser push
@@ -426,6 +452,13 @@ export default function App() {
       description,
     });
 
+    setIsPlansModalOpen(false);
+  };
+
+  // Handle start 30-day free trial
+  const handleStartTrial = () => {
+    if (!session) return;
+    setCurrentTier('pro_trial');
     setIsPlansModalOpen(false);
   };
 
@@ -916,6 +949,9 @@ export default function App() {
             userEmail={session.email}
             currentTier={currentTier}
             onOpenPlansModal={() => setIsPlansModalOpen(true)}
+            onUpdateProfile={handleUpdateProfile}
+            weightHistory={weightHistory}
+            measurements={measurements}
           />
         )}
 
@@ -1019,6 +1055,7 @@ export default function App() {
         currentTier={currentTier}
         session={session}
         onSubscribe={(tier) => handleSelectTier(tier, tier === 'pro_annual' ? 'annual' : 'monthly')}
+        onStartTrial={handleStartTrial}
       />
 
       {/* PWA Custom Premium Install Modal */}

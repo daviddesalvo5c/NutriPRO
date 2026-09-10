@@ -490,6 +490,77 @@ export function isFounderEmail(email?: string | null): boolean {
   return email.trim().toLowerCase() === FOUNDER_EMAIL.toLowerCase();
 }
 
+export function getUserTrialInfo(email: string): {
+  isTrialActive: boolean;
+  daysRemaining: number;
+  trialEndsAt: string | null;
+  trialStartedAt: string | null;
+  hasUsedTrial: boolean;
+} {
+  const normalized = email.trim().toLowerCase();
+  const trialKey = getUserStorageKey('nutrifit_pro_trial', normalized);
+  try {
+    const raw = localStorage.getItem(trialKey);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && data.trialEndsAt) {
+        const endsMs = new Date(data.trialEndsAt).getTime();
+        const nowMs = Date.now();
+        const diffMs = endsMs - nowMs;
+        const isTrialActive = diffMs > 0;
+        const daysRemaining = isTrialActive ? Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24))) : 0;
+        return {
+          isTrialActive,
+          daysRemaining,
+          trialEndsAt: data.trialEndsAt,
+          trialStartedAt: data.trialStartedAt || null,
+          hasUsedTrial: true,
+        };
+      }
+    }
+  } catch (e) {
+    console.error('Error reading trial info:', e);
+  }
+
+  return {
+    isTrialActive: false,
+    daysRemaining: 0,
+    trialEndsAt: null,
+    trialStartedAt: null,
+    hasUsedTrial: false,
+  };
+}
+
+export function startProTrial(email: string, userName?: string): { success: boolean; days: number; trialEndsAt: string } {
+  const normalized = email.trim().toLowerCase();
+  const existing = getUserTrialInfo(normalized);
+  
+  // If already active, return current status
+  if (existing.isTrialActive && existing.trialEndsAt) {
+    return { success: true, days: existing.daysRemaining, trialEndsAt: existing.trialEndsAt };
+  }
+
+  const startDate = new Date();
+  const endDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 full days
+  const trialEndsAt = endDate.toISOString();
+  const trialStartedAt = startDate.toISOString();
+
+  const trialData = {
+    trialStartedAt,
+    trialEndsAt,
+    email: normalized,
+    activatedAt: trialStartedAt,
+  };
+
+  const trialKey = getUserStorageKey('nutrifit_pro_trial', normalized);
+  localStorage.setItem(trialKey, JSON.stringify(trialData));
+
+  // Set subscription tier to pro_trial
+  setUserTier(normalized, 'pro_trial', 'monthly', userName);
+
+  return { success: true, days: 30, trialEndsAt };
+}
+
 export function getUserTier(email: string): SubscriptionTier {
   if (isFounderEmail(email)) {
     return 'vip';
@@ -501,6 +572,12 @@ export function getUserTier(email: string): SubscriptionTier {
     return 'vip';
   }
 
+  // Check 30-day Free Trial
+  const trial = getUserTrialInfo(email);
+  if (trial.isTrialActive) {
+    return 'pro_trial';
+  }
+
   // Check individual user subscription key
   const subKey = getUserStorageKey('nutrifit_user_sub', email);
   try {
@@ -508,6 +585,9 @@ export function getUserTier(email: string): SubscriptionTier {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && parsed.tier) {
+        if (parsed.tier === 'pro_trial') {
+          return trial.isTrialActive ? 'pro_trial' : 'free';
+        }
         return parsed.tier as SubscriptionTier;
       }
     }
@@ -519,6 +599,9 @@ export function getUserTier(email: string): SubscriptionTier {
   const users = loadRegisteredUsers();
   const user = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
   if (user && user.tier) {
+    if (user.tier === 'pro_trial') {
+      return trial.isTrialActive ? 'pro_trial' : 'free';
+    }
     return user.tier;
   }
 
@@ -663,7 +746,14 @@ export function revokeVipFromUser(email: string): { success: boolean; message: s
 export function hasUserProAccess(email: string, tier?: SubscriptionTier): boolean {
   if (isFounderEmail(email)) return true;
   const currentTier = tier || getUserTier(email);
-  return currentTier === 'vip' || currentTier === 'pro_monthly' || currentTier === 'pro_annual';
+  if (currentTier === 'vip' || currentTier === 'pro_monthly' || currentTier === 'pro_annual') {
+    return true;
+  }
+  if (currentTier === 'pro_trial') {
+    const trial = getUserTrialInfo(email);
+    return trial.isTrialActive;
+  }
+  return false;
 }
 
 // -------------------------------------------------------------

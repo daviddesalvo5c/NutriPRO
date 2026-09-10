@@ -37,6 +37,7 @@ import {
 } from '../types';
 import { FounderManagementPanel } from './FounderManagementPanel';
 import { DeviceSyncCard } from './DeviceSyncCard';
+import { PWARemindersCard } from './PWARemindersCard';
 import { isFounderEmail } from '../utils/storage';
 import { 
   ACTIVITY_OPTIONS, 
@@ -1188,16 +1189,21 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
         </div>
       </div>
 
+      {/* Recordatorios y Notificaciones Push PWA */}
+      <PWARemindersCard />
+
+      {/* Sincronización en la Nube Móvil ↔ PC */}
+      {session && (
+        <DeviceSyncCard 
+          session={session} 
+          profile={formData} 
+          onRefreshUserData={onRefreshUserData} 
+        />
+      )}
+
       {/* Módulo Exclusivo de Gestión de Invitados VIP, Métricas y Diagnóstico Técnico (SOLO FUNDADOR: daviddesalvo.5c@gmail.com) */}
       {isFounderEmail(session?.email) && session?.email && (
-        <>
-          <FounderManagementPanel currentUserEmail={session.email} />
-          <DeviceSyncCard 
-            session={session} 
-            profile={formData} 
-            onRefreshUserData={onRefreshUserData} 
-          />
-        </>
+        <FounderManagementPanel currentUserEmail={session.email} />
       )}
     </div>
   );

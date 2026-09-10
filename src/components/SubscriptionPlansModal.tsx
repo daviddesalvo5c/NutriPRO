@@ -16,12 +16,14 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  Gift,
+  Calendar
 } from 'lucide-react';
 import { SubscriptionTier, UserSession, SubscriptionTransaction } from '../types';
 import { supabaseRecordTransaction, supabaseUpdateUserTier } from '../services/supabaseService';
 import { notificationService } from '../utils/notificationService';
-import { recordTransaction } from '../utils/storage';
+import { recordTransaction, getUserTrialInfo, startProTrial } from '../utils/storage';
 
 interface SubscriptionPlansModalProps {
   isOpen: boolean;
@@ -30,6 +32,7 @@ interface SubscriptionPlansModalProps {
   session: UserSession | null;
   onSubscribe: (tier: 'pro_monthly' | 'pro_annual') => void;
   onCancelSubscription?: () => void;
+  onStartTrial?: () => void;
 }
 
 export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
@@ -39,6 +42,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
   session,
   onSubscribe,
   onCancelSubscription,
+  onStartTrial,
 }) => {
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('annual');
   const [viewMode, setViewMode] = useState<'plans' | 'waiting_verification' | 'success'>('plans');
@@ -48,6 +52,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
   const [paymentRefInput, setPaymentRefInput] = useState<string>('');
   const [activePlanActivated, setActivePlanActivated] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isActivatingTrial, setIsActivatingTrial] = useState<boolean>(false);
 
   // Real Mercado Pago Argentina checkout payment links
   const MP_LINKS = {
@@ -71,7 +76,40 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
   if (!isOpen) return null;
 
   const isVip = currentTier === 'vip' || session?.isFounder;
-  const isPro = currentTier === 'pro_monthly' || currentTier === 'pro_annual';
+  const isPaidPro = currentTier === 'pro_monthly' || currentTier === 'pro_annual';
+  const userEmail = session?.email || '';
+  const trialInfo = userEmail ? getUserTrialInfo(userEmail) : { 
+    isTrialActive: false, 
+    daysRemaining: 0, 
+    hasUsedTrial: false, 
+    trialEndsAt: null, 
+    trialStartedAt: null 
+  };
+  const isTrial = currentTier === 'pro_trial' || trialInfo.isTrialActive;
+  const isPro = isPaidPro || isTrial;
+
+  const handleActivateFreeTrial = () => {
+    if (!userEmail) {
+      notificationService.error('Debes iniciar sesión para activar los 30 días de prueba.');
+      return;
+    }
+    setIsActivatingTrial(true);
+    try {
+      const res = startProTrial(userEmail, session?.name);
+      if (res.success) {
+        if (onStartTrial) {
+          onStartTrial();
+        }
+        notificationService.success('¡Felicitaciones! Has activado 30 días de prueba gratuita de NutriFit Pro.');
+        onClose();
+      }
+    } catch (e) {
+      console.error('Error activating trial:', e);
+      notificationService.error('No se pudo activar la prueba. Intenta nuevamente.');
+    } finally {
+      setIsActivatingTrial(false);
+    }
+  };
 
   // Step 1: Open Mercado Pago checkout WITHOUT upgrading prematurely
   const handleOpenMercadoPago = (cycle: 'monthly' | 'annual') => {
@@ -410,6 +448,79 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
               </div>
             )}
 
+            {/* Trial Active Banner */}
+            {isTrial && !isVip && !isPaidPro && (
+              <div className="mx-6 sm:mx-8 mt-6 p-4 rounded-2xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-emerald-600/15 border border-emerald-400/40 dark:border-emerald-500/30 flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-md">
+                    <Sparkles className="w-5 h-5 text-amber-300" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-extrabold text-emerald-900 dark:text-emerald-200 text-sm sm:text-base">
+                        ¡Mes de Prueba Pro Activo! ✦
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white font-black text-[10px] uppercase tracking-wider">
+                        {trialInfo.daysRemaining} días restantes
+                      </span>
+                    </div>
+                    <p className="text-xs text-emerald-800/80 dark:text-emerald-300/80">
+                      Tienes acceso ilimitado a todas las herramientas avanzadas: escáner IA sin tope diario, asistente de comidas con macros restantes y menús semanales.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleOpenMercadoPago('annual')}
+                  className="text-xs font-bold text-emerald-800 dark:text-emerald-200 bg-white dark:bg-zinc-800 px-3.5 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-700 shadow-xs hover:bg-emerald-50 dark:hover:bg-zinc-700 transition-all"
+                >
+                  Asegurar Anual (-39%)
+                </button>
+              </div>
+            )}
+
+            {/* 30-Day Free Trial Promotional Offer (For Free users who haven't used trial) */}
+            {!isPro && !isVip && !trialInfo.hasUsedTrial && (
+              <div className="mx-6 sm:mx-8 mt-6 p-5 rounded-3xl bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-700 text-white shadow-xl relative overflow-hidden flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-emerald-400/30">
+                <div className="absolute -right-8 -bottom-8 w-40 h-40 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="space-y-1.5 max-w-lg z-10">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-400 text-amber-950 font-black text-[10px] uppercase tracking-wider shadow-xs">
+                    <Gift className="w-3 h-3" />
+                    <span>Oferta Especial de Bienvenida · 1 Mes Gratis</span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black tracking-tight leading-snug text-white">
+                    Probá NutriFit Pro durante 30 días sin costo
+                  </h3>
+                  <p className="text-xs text-emerald-100/90 leading-relaxed">
+                    Disfrutá del escáner visual con IA ilimitado, el asistente que arma platos con tus macros restantes y la lista de compras automática. <strong>Sin tarjeta de crédito y activación inmediata con 1 solo clic.</strong>
+                  </p>
+                </div>
+
+                <div className="z-10 shrink-0 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    id="btn-activate-30-day-trial"
+                    onClick={handleActivateFreeTrial}
+                    disabled={isActivatingTrial}
+                    className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-white hover:bg-emerald-50 active:scale-95 text-emerald-900 text-xs font-black shadow-lg transition-all flex items-center justify-center gap-2 hover:shadow-emerald-950/20"
+                  >
+                    {isActivatingTrial ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                        <span>Activando tu mes gratis...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
+                        <span>Iniciar 30 Días Gratis (1 Clic)</span>
+                        <ArrowRight className="w-4 h-4 text-emerald-700" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Plan Cards Grid (2 cards for public, 3 for internal VIP/founder) */}
         <div className={`p-6 sm:p-8 grid grid-cols-1 ${isVip ? 'md:grid-cols-3' : 'md:grid-cols-2 max-w-3xl mx-auto'} gap-6`}>
           {/* Card 1: Plan Gratuito */}
@@ -564,7 +675,7 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                   <Sparkles className="w-3.5 h-3.5" />
                   <span>Ya tienes acceso total (VIP)</span>
                 </button>
-              ) : isPro ? (
+              ) : isPaidPro ? (
                 <div className="space-y-2">
                   <button
                     type="button"
@@ -583,6 +694,27 @@ export const SubscriptionPlansModal: React.FC<SubscriptionPlansModalProps> = ({
                       Cancelar suscripción
                     </button>
                   )}
+                </div>
+              ) : isTrial ? (
+                <div className="space-y-2">
+                  <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700 text-center">
+                    <span className="text-xs font-extrabold text-emerald-800 dark:text-emerald-200 block">
+                      Prueba Pro Activa · {trialInfo.daysRemaining} días restantes
+                    </span>
+                    <span className="text-[11px] text-emerald-600 dark:text-emerald-400">
+                      Disfrutas de todas las ventajas Pro sin costo
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    id="btn-subscribe-pro-while-trial"
+                    onClick={() => handleOpenMercadoPago(billingCycle)}
+                    disabled={isProcessing}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-sky-200" />
+                    <span>Asegurar mi Plan ({billingCycle === 'annual' ? '$94.999 ARS/año' : '$12.999 ARS/mes'})</span>
+                  </button>
                 </div>
               ) : (
                 <button

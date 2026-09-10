@@ -1,0 +1,59 @@
+{
+  "id": "/",
+  "name": "NutriFit Pro - Calculadora Nutricional & Perfil de Usuario",
+  "short_name": "NutriFit Pro",
+  "description": "Diario y escáner nutricional inteligente con IA, base de alimentos argentinos, cálculo de macros, ciclado calórico y sincronización deportiva.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#041619",
+  "background_color": "#041619",
+  "categories": ["health", "fitness", "lifestyle", "food"],
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Diario de Comidas",
+      "short_name": "Diario",
+      "description": "Abre tu diario de comidas del día",
+      "url": "/?tab=diary",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Escanear Plato con IA",
+      "short_name": "Escáner",
+      "description": "Escanea tu plato o código de barras",
+      "url": "/?tab=scanner",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}

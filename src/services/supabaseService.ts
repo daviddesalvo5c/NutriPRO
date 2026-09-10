@@ -958,6 +958,62 @@ export async function supabaseRevokeVip(
   }
 }
 
+export async function supabaseCheckUserSubscription(
+  email: string,
+  explicitUserId?: string
+): Promise<SubscriptionTier | null> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (isFounderEmail(cleanEmail)) return 'vip';
+
+  // 1. Try server pull first (service role key bypass)
+  try {
+    const res = await fetch(`/api/sync/pull?email=${encodeURIComponent(cleanEmail)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.userData?.tier) {
+        return data.userData.tier as SubscriptionTier;
+      }
+    }
+  } catch {
+    // continue to client fallback
+  }
+
+  if (!isSupabaseConfigured) return null;
+
+  // 2. Check vip_invitations table directly
+  try {
+    const { data: vipRow } = await supabase
+      .from('vip_invitations')
+      .select('status')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (vipRow && (vipRow.status === 'active' || !vipRow.status)) {
+      return 'vip';
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. Check profiles table directly
+  try {
+    let query = supabase.from('profiles').select('subscription_plan');
+    if (explicitUserId) {
+      query = query.eq('id', explicitUserId);
+    } else {
+      query = query.eq('email', cleanEmail);
+    }
+    const { data: prof } = await query.maybeSingle();
+    if (prof?.subscription_plan) {
+      return prof.subscription_plan as SubscriptionTier;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
 // -------------------------------------------------------------
 // 4. TRANSACTIONS (Table: transactions or subscription_transactions)
 // -------------------------------------------------------------
