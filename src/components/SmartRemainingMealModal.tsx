@@ -235,14 +235,15 @@ export const SmartRemainingMealModal: React.FC<SmartRemainingMealModalProps> = (
   if (!isOpen) return null;
 
   // Clean rounding of macros to eliminate JavaScript floating point glitches
-  const safeCals = Math.max(0, Math.round(remainingCalories));
-  const safeProt = Math.max(0, Math.round(remainingProtein * 10) / 10);
-  const safeCarbs = Math.max(0, Math.round(remainingCarbs * 10) / 10);
-  const safeFat = Math.max(0, Math.round(remainingFat * 10) / 10);
+  const safeCals = Math.max(0, Math.round(Number(remainingCalories) || 0));
+  const safeProt = Math.max(0, Math.round((Number(remainingProtein) || 0) * 10) / 10);
+  const safeCarbs = Math.max(0, Math.round((Number(remainingCarbs) || 0) * 10) / 10);
+  const safeFat = Math.max(0, Math.round((Number(remainingFat) || 0) * 10) / 10);
 
-  const formatMacro = (val: number) => {
-    if (Number.isInteger(val)) return val.toString();
-    return (Math.round(val * 10) / 10).toFixed(1);
+  const formatMacro = (val: number | undefined | null) => {
+    if (val === undefined || val === null || isNaN(Number(val))) return '0';
+    const num = Math.round(Number(val) * 10) / 10;
+    return Number.isInteger(num) ? num.toString() : num.toFixed(1);
   };
 
   const handleGenerate = async () => {

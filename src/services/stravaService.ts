@@ -18,7 +18,7 @@ export function getStoredStravaConfig(): StravaAuthConfig {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
         return {
-          clientId: parsed.clientId || '153892',
+          clientId: parsed.clientId || '278644',
           clientSecret: parsed.clientSecret || '',
           accessToken: parsed.accessToken || null,
           refreshToken: parsed.refreshToken || null,
@@ -31,7 +31,7 @@ export function getStoredStravaConfig(): StravaAuthConfig {
     console.warn('Error reading stored Strava config:', err);
   }
   return {
-    clientId: '153892', // Default Strava Application Client ID or configurable
+    clientId: '278644', // Default Strava Application Client ID
     clientSecret: '',
     accessToken: null,
     refreshToken: null,

@@ -557,7 +557,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
             {/* Quick action banner: Armame una comida con lo que me queda de macros */}
             <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
               <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Restan hoy: <strong className="text-zinc-900 dark:text-zinc-100 font-bold">{Math.max(0, caloriesRemaining)} kcal</strong> · {Math.max(0, targetProtein - totalProteinConsumed)}g P · {Math.max(0, targetCarbs - totalCarbsConsumed)}g C · {Math.max(0, targetFat - totalFatConsumed)}g G
+                Restan hoy: <strong className="text-zinc-900 dark:text-zinc-100 font-bold">{Math.max(0, Math.round(caloriesRemaining))} kcal</strong> · {formatGrams(Math.max(0, targetProtein - totalProteinConsumed))}g P · {formatGrams(Math.max(0, targetCarbs - totalCarbsConsumed))}g C · {formatGrams(Math.max(0, targetFat - totalFatConsumed))}g G
               </div>
               <button
                 type="button"
@@ -868,10 +868,10 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
       <SmartRemainingMealModal
         isOpen={isSmartMealModalOpen}
         onClose={() => setIsSmartMealModalOpen(false)}
-        remainingCalories={Math.max(0, caloriesRemaining)}
-        remainingProtein={Math.max(0, targetProtein - totalProteinConsumed)}
-        remainingCarbs={Math.max(0, targetCarbs - totalCarbsConsumed)}
-        remainingFat={Math.max(0, targetFat - totalFatConsumed)}
+        remainingCalories={Math.max(0, Math.round(caloriesRemaining))}
+        remainingProtein={Math.max(0, roundGrams(targetProtein - totalProteinConsumed))}
+        remainingCarbs={Math.max(0, roundGrams(targetCarbs - totalCarbsConsumed))}
+        remainingFat={Math.max(0, roundGrams(targetFat - totalFatConsumed))}
         targetCalories={targetCalories}
         onSaveFoodItem={(item, mealType) => {
           onAddFoodItem(selectedDate, { ...item, mealType });

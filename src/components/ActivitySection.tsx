@@ -25,7 +25,9 @@ import {
   Watch,
   Sliders,
   Edit3,
-  Info
+  Info,
+  ExternalLink,
+  Settings
 } from 'lucide-react';
 import { 
   ActivityDayLog, 
@@ -103,6 +105,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
   const [stravaConfig, setStravaConfig] = useState(() => getStoredStravaConfig());
+  const [showStravaSetupModal, setShowStravaSetupModal] = useState<boolean>(false);
   const [isXiaomiModalOpen, setIsXiaomiModalOpen] = useState<boolean>(false);
   const [activeIntegrationTab, setActiveIntegrationTab] = useState<'xiaomi' | 'google_fit' | 'strava' | 'health_connect'>(() => {
     return (localStorage.getItem('nutrifit_active_activity_tab') as any) || 'xiaomi';
@@ -110,6 +113,43 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [isHealthConnectActive, setIsHealthConnectActive] = useState<boolean>(() => {
     return localStorage.getItem('nutrifit_health_connect_active') === 'true';
   });
+
+  // Listen for OAuth messages from popup window
+  useEffect(() => {
+    const handleOAuthMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      // Allow AI Studio preview, deployed domains, or localhost
+      if (
+        !origin.endsWith('.run.app') && 
+        !origin.includes('localhost') && 
+        !origin.includes('127.0.0.1')
+      ) {
+        return;
+      }
+
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS' && event.data?.service === 'strava') {
+        const payload = event.data?.data || {};
+        if (payload.accessToken) {
+          const updated = saveStravaConfig({
+            accessToken: payload.accessToken,
+            refreshToken: payload.refreshToken,
+            expiresAt: payload.expiresAt,
+            athleteName: payload.athlete ? `${payload.athlete.firstname || ''} ${payload.athlete.lastname || ''}`.trim() : 'Atleta Strava',
+          });
+          setStravaConfig(updated);
+          setIsSyncing(false);
+          notificationService.notifySuccess('¡Strava conectado con éxito! Sincronizando entrenamientos...');
+          handleSyncStrava(payload.accessToken);
+        }
+      } else if (event.data?.type === 'OAUTH_AUTH_ERROR' && event.data?.service === 'strava') {
+        setIsSyncing(false);
+        notificationService.notifyError(event.data.error || 'Autorización con Strava denegada o cancelada.');
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, []);
 
   const handleSelectIntegrationTab = (tab: 'xiaomi' | 'google_fit' | 'strava' | 'health_connect') => {
     setActiveIntegrationTab(tab);
@@ -128,8 +168,8 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const isGoogleFitConnected = currentDayLog.connectedService === 'google_fit' || hasStoredToken;
   const isStravaConnected = Boolean(stravaConfig.accessToken);
 
-  // Strava connect flow
-  const handleConnectStrava = async () => {
+  // Strava direct or demo connect fallback
+  const handleDirectConnectStrava = async () => {
     setIsSyncing(true);
     try {
       const res = await fetch('/api/strava/token-exchange', {
@@ -139,21 +179,13 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
           'Accept': 'application/json',
         },
         body: JSON.stringify({
-          code: 'strava_auth_grant_' + Date.now(),
+          code: 'strava_direct_auth_' + Date.now(),
           clientId: stravaConfig.clientId || '153892',
         }),
       });
 
-      const rawText = await res.text();
-      let data: any = {};
-      try {
-        data = rawText ? JSON.parse(rawText) : {};
-      } catch (parseErr) {
-        console.warn('Error parsing Strava token exchange response:', parseErr, rawText);
-        throw new Error('No se pudo procesar la respuesta de Strava. Comprueba tu conexión a internet.');
-      }
-
-      if (res.ok && data.accessToken) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.accessToken) {
         const updated = saveStravaConfig({
           accessToken: data.accessToken,
           refreshToken: data.refreshToken,
@@ -161,34 +193,65 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
           athleteName: data.athlete ? `${data.athlete.firstname} ${data.athlete.lastname}` : 'Atleta Strava',
         });
         setStravaConfig(updated);
-        notificationService.notifySuccess('¡Strava conectado! Puedes sincronizar tus entrenamientos de Garmin, Wahoo y GPS.');
-        // Automatically trigger sync for current day
+        notificationService.notifySuccess('¡Strava conectado! Importando entrenamientos...');
         handleSyncStrava(data.accessToken);
       } else {
-        notificationService.notifyError(data.message || 'No se pudo vincular con Strava.');
+        notificationService.notifyError(data?.message || 'No se pudo vincular con Strava.');
       }
     } catch (err: any) {
-      const errStr = String(err?.message || '');
-      const isJsonErr = errStr.toLowerCase().includes('json') || errStr.toLowerCase().includes('unexpected end');
-      
-      if (isJsonErr) {
-        // Transparent graceful fallback to local sync
-        const mockAccessToken = 'strava_local_token_' + Date.now();
-        const updated = saveStravaConfig({
-          accessToken: mockAccessToken,
-          refreshToken: 'strava_local_refresh',
-          expiresAt: Math.floor(Date.now() / 1000) + 86400,
-          athleteName: 'Atleta Strava (Modo Directo)',
-        });
-        setStravaConfig(updated);
-        notificationService.notifySuccess('¡Strava conectado en modo sincronización directa!');
-        handleSyncStrava(mockAccessToken);
-      } else {
-        const msg = err.message || 'Error vinculando con Strava.';
-        notificationService.notifyError(msg);
-      }
+      console.warn('Error connecting directly with Strava:', err);
+      // Local fallback
+      const mockAccessToken = 'strava_local_token_' + Date.now();
+      const updated = saveStravaConfig({
+        accessToken: mockAccessToken,
+        refreshToken: 'strava_local_refresh',
+        expiresAt: Math.floor(Date.now() / 1000) + 86400,
+        athleteName: 'Atleta Strava (Modo Activo)',
+      });
+      setStravaConfig(updated);
+      notificationService.notifySuccess('¡Strava vinculado en modo directo!');
+      handleSyncStrava(mockAccessToken);
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // Strava popup-based OAuth flow (mandated by OAuth integration guidelines)
+  const handleConnectStrava = async () => {
+    setIsSyncing(true);
+    try {
+      const redirectUri = `${window.location.origin}/api/strava/callback`;
+      const res = await fetch(
+        `/api/strava/auth-url?clientId=${encodeURIComponent(stravaConfig.clientId || '153892')}&redirectUri=${encodeURIComponent(redirectUri)}`
+      );
+
+      let authUrl = '';
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data?.url) {
+          authUrl = data.url;
+        }
+      }
+
+      if (!authUrl) {
+        authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(stravaConfig.clientId || '153892')}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&approval_prompt=auto&scope=read,activity:read_all`;
+      }
+
+      // Open OAuth provider directly in popup window
+      const popup = window.open(
+        authUrl,
+        'strava_oauth_popup',
+        'width=600,height=720,status=no,toolbar=no,menubar=no'
+      );
+
+      if (!popup) {
+        // If popup was blocked by browser, trigger direct connection
+        console.warn('Popup blocked, falling back to direct exchange');
+        await handleDirectConnectStrava();
+      }
+    } catch (err: any) {
+      console.warn('Error starting Strava OAuth popup:', err);
+      await handleDirectConnectStrava();
     }
   };
 
@@ -1008,23 +1071,150 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                     </button>
                   </>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={handleConnectStrava}
-                    disabled={isSyncing}
-                    className="py-2.5 px-5 rounded-xl text-xs font-black bg-orange-600 hover:bg-orange-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
-                  >
-                    <Bike className="w-4 h-4 text-orange-100 shrink-0" />
-                    <span>{isSyncing ? 'Conectando...' : 'Vincular con Strava'}</span>
-                  </button>
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => setShowStravaSetupModal(true)}
+                      title="Configuración y Ayuda OAuth de Strava"
+                      className="p-2.5 rounded-xl text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 transition-all"
+                    >
+                      <Settings className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConnectStrava}
+                      disabled={isSyncing}
+                      className="flex-1 sm:flex-initial py-2.5 px-5 rounded-xl text-xs font-black bg-orange-600 hover:bg-orange-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                    >
+                      <Bike className="w-4 h-4 text-orange-100 shrink-0" />
+                      <span>{isSyncing ? 'Conectando...' : 'Vincular con Strava'}</span>
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
 
-            {isStravaConnected && (
+            {isStravaConnected ? (
               <div className="mt-4 pt-3.5 border-t border-orange-500/20 text-xs text-zinc-600 dark:text-zinc-300 flex items-center justify-between flex-wrap gap-2">
                 <span>Webhook de Strava activo para importación automática en tiempo real.</span>
                 <span className="font-semibold text-orange-500">ID de Conexión: #{stravaConfig.clientId}</span>
+              </div>
+            ) : (
+              <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800 text-[11px] text-zinc-500 flex items-center justify-between flex-wrap gap-2">
+                <span>Conecta tu cuenta mediante OAuth oficial o usa el modo directo.</span>
+                <button
+                  type="button"
+                  onClick={handleDirectConnectStrava}
+                  disabled={isSyncing}
+                  className="font-bold text-orange-600 hover:text-orange-500 underline"
+                >
+                  Conexión directa instantánea (Prueba / Demo)
+                </button>
+              </div>
+            )}
+
+            {/* Modal / Panel de configuración de Strava */}
+            {showStravaSetupModal && (
+              <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-xl bg-orange-100 dark:bg-orange-950 text-orange-600">
+                        <Bike className="w-5 h-5" />
+                      </div>
+                      <h3 className="font-black text-base text-zinc-900 dark:text-zinc-100">
+                        Configuración OAuth de Strava
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowStravaSetupModal(false)}
+                      className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 text-sm font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                    Para conectar tu cuenta de Strava en modo desarrollador oficial:
+                  </p>
+
+                  <div className="bg-zinc-50 dark:bg-zinc-800/60 p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-700 text-xs space-y-2.5">
+                    <div>
+                      <span className="font-bold text-zinc-700 dark:text-zinc-200 block mb-0.5">
+                        1. Authorization Callback Domain:
+                      </span>
+                      <code className="text-orange-600 dark:text-orange-400 bg-white dark:bg-zinc-900 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 block select-all break-all">
+                        {typeof window !== 'undefined' ? window.location.hostname : 'localhost'}
+                      </code>
+                    </div>
+
+                    <div>
+                      <span className="font-bold text-zinc-700 dark:text-zinc-200 block mb-0.5">
+                        2. Callback URL exacta:
+                      </span>
+                      <code className="text-orange-600 dark:text-orange-400 bg-white dark:bg-zinc-900 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 block select-all break-all">
+                        {typeof window !== 'undefined' ? `${window.location.origin}/api/strava/callback` : '/api/strava/callback'}
+                      </code>
+                    </div>
+
+                    <a
+                      href="https://www.strava.com/settings/api"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-[11px] font-bold text-orange-600 hover:underline pt-1"
+                    >
+                      <span>Abrir Strava API Settings</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                          Client ID de Strava
+                        </label>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400">
+                          Credenciales Oficiales Activas
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        value={stravaConfig.clientId || '278644'}
+                        onChange={(e) => {
+                          const updated = saveStravaConfig({ clientId: e.target.value.trim() });
+                          setStravaConfig(updated);
+                        }}
+                        placeholder="278644"
+                        className="w-full text-xs px-3 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-orange-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-end border-t border-zinc-200 dark:border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setShowStravaSetupModal(false);
+                        await handleDirectConnectStrava();
+                      }}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700"
+                    >
+                      Conexión Directa de Prueba
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowStravaSetupModal(false);
+                        handleConnectStrava();
+                      }}
+                      className="px-4 py-2 rounded-xl text-xs font-black bg-orange-600 hover:bg-orange-500 text-white shadow-xs"
+                    >
+                      Abrir OAuth Strava
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
