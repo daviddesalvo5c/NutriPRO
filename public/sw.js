@@ -1,5 +1,5 @@
 // Service Worker for NutriFit Pro PWA
-const CACHE_NAME = 'nutrifit-pro-cache-v1';
+const CACHE_NAME = 'nutrifit-pro-cache-v2';
 
 const STATIC_ASSETS = [
   '/',
@@ -13,8 +13,9 @@ const STATIC_ASSETS = [
   '/pwa-maskable-512x512.png'
 ];
 
-// Install: precache essential static shell
+// Install: precache essential static shell and activate immediately
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
@@ -22,10 +23,9 @@ self.addEventListener('install', (event) => {
       });
     })
   );
-  self.skipWaiting();
 });
 
-// Activate: clean older caches
+// Activate: clean older caches immediately
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -36,17 +36,20 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch: Network-first for dynamic API routes, cache-first for icons/static
+// Fetch: NEVER intercept API, backend or POST requests
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Don't intercept API requests or POST requests
-  if (event.request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
+  // Complete passthrough for API, auth, and non-GET requests
+  if (
+    event.request.method !== 'GET' || 
+    url.pathname.startsWith('/api') || 
+    url.pathname.startsWith('/auth')
+  ) {
     return;
   }
 

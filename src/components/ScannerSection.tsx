@@ -444,30 +444,56 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
       } catch {}
     }
 
-    // Micro stabilization delay (80ms) to ensure lens is not moving from finger press
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Hand stabilization delay (140ms) to ensure lens is steady after screen tap
+    await new Promise((resolve) => setTimeout(resolve, 140));
 
     setFlashEffect(true);
     setTimeout(() => setFlashEffect(false), 200);
 
     try {
       const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('No 2d context available');
+      let dataUrl = '';
 
-      // Draw current video frame to canvas
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+      // Check if browser supports ImageCapture on the video track for ultra-sharp full-res photo
+      const stream = video.srcObject as MediaStream | null;
+      const track = stream?.getVideoTracks?.()?.[0];
+
+      if (track && typeof (window as any).ImageCapture !== 'undefined') {
+        try {
+          const imageCapture = new (window as any).ImageCapture(track);
+          const blob = await imageCapture.takePhoto();
+          dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } catch {
+          // Fallback to high-res canvas if takePhoto fails or not permitted
+        }
+      }
+
+      if (!dataUrl) {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('No 2d context available');
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        // Draw current video frame to canvas
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      }
 
       setIsStabilizing(false);
 
       if (scanMode === 'barcode') {
         processBarcodeImage(dataUrl);
       } else {
-        processImage(dataUrl);
+        processImage(dataUrl, userHint);
       }
     } catch (err) {
       setIsStabilizing(false);
@@ -973,7 +999,7 @@ export const ScannerSection: React.FC<ScannerSectionProps> = ({
           </div>
 
           {/* Quick Precision Hint Bar for 1st-Photo Accuracy */}
-          {scanMode === 'food' && (
+          {scanMode === 'plate' && (
             <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-xs space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

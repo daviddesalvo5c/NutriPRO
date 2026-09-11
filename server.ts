@@ -121,78 +121,96 @@ app.post('/api/analyze-food', async (req, res) => {
     ].filter(Boolean).join('\n');
 
     const promptText = `Eres un nutricionista clínico de máxima precisión y perito bromatológico especializado en visión por computadora para Argentina y gastronomía internacional.
-Tu objetivo es analizar la foto del plato o alimento y calcular con máxima exactitud en el PRIMER INTENTO:
+Tu objetivo es analizar la foto del plato o alimento y calcular con MÁXIMA EXACTITUD EN EL PRIMER INTENTO:
 
 ${contextualClues ? `=== CONTEXTO DEL USUARIO ===\n${contextualClues}\n===========================` : ''}
 
-PASO A PASO OBLIGATORIO DE ANÁLISIS FOTOGRÁFICO:
-1. IDENTIFICACIÓN Y RECONOCIMIENTO:
-   - Reconoce el plato específico (ej: "Milanesa de ternera al horno con puré de papas", "Bife de chorizo con ensalada mixta", "2 Empanadas de carne", "Tostadas integrales con palta y huevo poché", "Café con leche con medialuna", "Pollo grillado con arroz blanco y vegetales").
-   - Identifica si pertenece a la cocina argentina o internacional cotidiana.
+TABLA DE CALIBRACIÓN REALISTA DE PORCIONES EN EL PRIMER INTENTO:
+- Plato playo completo de almuerzo/cena (adulto): suele pesar entre 350g y 550g neto en total.
+- Porción de carne/bife o pechuga de pollo cocida: 160g a 240g (250 a 450 kcal).
+- Milanesa mediana de ternera o pollo: 180g a 260g (380 a 550 kcal sola, más guarnición). Si es napolitana con jamón y queso: agregar +120 kcal.
+- Porción de fideos o arroz cocido: 200g a 300g (300 a 450 kcal con salsa).
+- Guarnición de puré de papas: 160g a 250g (160 a 260 kcal).
+- Empanada argentina promedio: 85g a 100g c/u (230 a 280 kcal c/u).
+- Tarta de verduras o jamón y queso (1 porción): 180g a 230g (320 a 450 kcal).
+- Huevos revueltos (2 huevos) con 2 tostadas: 180g a 220g (290 a 370 kcal).
+- Ensalada completa con aceite y condimento: 200g a 300g (150 a 260 kcal).
 
-2. CALIBRACIÓN VOLUMÉTRICA Y TAMAÑO DE PORCIÓN (CRÍTICO):
-   - Observa la vajilla y referencias visuales: plato playo estándar (~24-26 cm de diámetro), plato hondo (~20 cm), bowl mediano (~400ml), taza de desayuno (~200-250ml), cubiertos o bordes.
-   - Si la comida ocupa medio plato playo, son aprox 200-250g. Si cubre todo el plato de forma abundante, son aprox 350-500g.
-   - No subestimes el peso neto comestible: la carne cocida pierde ~25% de agua respecto al peso crudo pero sigue pesando entre 150g y 250g por bife/pechuga. Los fideos o arroz cocido absorben agua y triplican su peso en seco (un plato típico cocido pesa 180-220g).
-
-3. ESTIMACIÓN DE GRASAS OCULTAS Y MÉTODOS DE COCCIÓN:
-   - Aceite de cocción, manteca en puré, rebozado frito vs al horno, quesos derretidos o salsas. Si se ve dorado brillante o frito, computar las grasas añadidas correspondientes (1 cucharada de aceite = 14g grasa = 126 kcal).
-
-4. COHERENCIA BROMATOLÓGICA Y MATEMÁTICA ATWATER:
-   - Las calorías deben reflejar la fórmula Atwater: Calorías ≈ (Proteína * 4) + (Carbohidratos * 4) + (Grasas * 9).
-   - Desglosa cada ingrediente visible con su peso exacto estimado en gramos (ej: "Bife de lomo cocido", "180g").
+REGLAS DE VISIÓN Y VOLUMEN:
+1. IDENTIFICACIÓN PRECISA: Identifica el plato específico y cada ingrediente por separado.
+2. VOLUMEN Y PROFUNDIDAD: No subestimes el espesor de la comida bajo la superficie. Si cubre el plato, computa el peso neto comestible real de un adulto, no una porción infantil.
+3. GRASAS Y COCCIÓN: Computa aceites de cocción, manteca y salsas adheridas (mínimo 1 cucharada = 14g grasa en platos salteados, fritos o carnes al horno).
+4. BALANCE ATWATER OBLIGATORIO: Calorías ≈ (Proteína * 4) + (Carbohidratos * 4) + (Grasas * 9).
 
 Responde únicamente con el objeto JSON estructurado según el schema especificado.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: detectedMime,
-              data: cleanBase64,
+    const contents = {
+      parts: [
+        {
+          inlineData: {
+            mimeType: detectedMime,
+            data: cleanBase64,
+          },
+        },
+        {
+          text: promptText,
+        },
+      ],
+    };
+
+    const schemaConfig = {
+      responseMimeType: 'application/json',
+      temperature: 0.1,
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          category: { type: Type.STRING },
+          weightGrams: { type: Type.NUMBER },
+          calories: { type: Type.NUMBER },
+          protein: { type: Type.NUMBER },
+          carbs: { type: Type.NUMBER },
+          fat: { type: Type.NUMBER },
+          confidence: { type: Type.NUMBER },
+          observation: { type: Type.STRING },
+          ingredients: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                amount: { type: Type.STRING },
+              },
+              required: ['name', 'amount'],
             },
           },
-          {
-            text: promptText,
-          },
+        },
+        required: [
+          'name', 'category', 'weightGrams', 'calories', 'protein', 'carbs', 'fat', 'confidence', 'ingredients',
         ],
       },
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            name: { type: Type.STRING },
-            category: { type: Type.STRING },
-            weightGrams: { type: Type.NUMBER },
-            calories: { type: Type.NUMBER },
-            protein: { type: Type.NUMBER },
-            carbs: { type: Type.NUMBER },
-            fat: { type: Type.NUMBER },
-            confidence: { type: Type.NUMBER },
-            observation: { type: Type.STRING },
-            ingredients: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  amount: { type: Type.STRING },
-                },
-                required: ['name', 'amount'],
-              },
-            },
-          },
-          required: [
-            'name', 'category', 'weightGrams', 'calories', 'protein', 'carbs', 'fat', 'confidence', 'ingredients',
-          ],
-        },
-      },
-    });
+    };
 
-    const textOutput = response.text;
+    let textOutput: string | undefined;
+
+    // First attempt with gemini-3.8-flash (official fast multimodal model)
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents,
+        config: schemaConfig,
+      });
+      textOutput = response.text;
+    } catch (primaryErr) {
+      console.warn('[Vision API] gemini-3.8-flash notice, falling back to gemini-flash-latest:', primaryErr);
+      const fallbackResponse = await ai.models.generateContent({
+        model: 'gemini-flash-latest',
+        contents,
+        config: schemaConfig,
+      });
+      textOutput = fallbackResponse.text;
+    }
+
     if (!textOutput) {
       throw new Error('Gemini did not return text output.');
     }
@@ -1372,8 +1390,9 @@ Responde ÚNICAMENTE en formato JSON con la siguiente estructura:
   ]
 }`;
 
-        const geminiResponse = await client.models.generateContent({
-          model: 'gemini-2.5-flash',
+        // Add 5.5s timeout race to never hang connection or trigger gateway drops
+        const geminiPromise = client.models.generateContent({
+          model: 'gemini-3.8-flash',
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
@@ -1381,13 +1400,20 @@ Responde ÚNICAMENTE en formato JSON con la siguiente estructura:
           },
         });
 
-        const rawText = geminiResponse.text?.trim() || '{}';
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini timeout fallback')), 5500)
+        );
+
+        const geminiResponse: any = await Promise.race([geminiPromise, timeoutPromise]);
+
+        const rawText = geminiResponse?.text?.trim() || '{}';
         const parsed = JSON.parse(rawText);
         if (parsed.options && Array.isArray(parsed.options) && parsed.options.length > 0) {
+          res.setHeader('Content-Type', 'application/json');
           return res.json({ success: true, source: 'gemini_ai', options: parsed.options });
         }
       } catch (geminiError) {
-        console.warn('[SmartMeal AI] Error calling Gemini, falling back to heuristic generator:', geminiError);
+        console.warn('[SmartMeal AI] Notice calling Gemini, using instant local recipes:', geminiError);
       }
     }
 

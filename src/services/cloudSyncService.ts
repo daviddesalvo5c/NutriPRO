@@ -8,6 +8,7 @@ import {
   ProgressPhotoEntry, 
   SubscriptionTier 
 } from '../types';
+import { isFounderEmail } from '../utils/storage';
 import {
   supabaseFetchDailyLogs,
   supabaseFetchUserProfile,
@@ -16,6 +17,16 @@ import {
   supabaseSaveUserProfile,
   supabaseAddMultipleFoods,
 } from './supabaseService';
+
+async function safeJson<T = any>(res: Response): Promise<T | null> {
+  try {
+    const text = await res.text();
+    if (!text || text.trim() === '') return null;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
 
 export interface CloudUserData {
   email: string;
@@ -54,8 +65,8 @@ class CloudSyncService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password }),
       });
-      const data = await res.json();
-      return data;
+      const data = await safeJson<CloudAuthResponse>(res);
+      return data || { success: false, message: 'Respuesta vacía del servidor.' };
     } catch (err) {
       console.warn('Cloud register network error:', err);
       return { success: false, message: 'No se pudo conectar con el servidor de la nube.' };
@@ -72,8 +83,8 @@ class CloudSyncService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
-      const data = await res.json();
-      return data;
+      const data = await safeJson<CloudAuthResponse>(res);
+      return data || { success: false, message: 'Respuesta vacía del servidor.' };
     } catch (err) {
       console.warn('Cloud login network error:', err);
       return { success: false, message: 'Error al contactar con el servidor de sincronización.' };
@@ -85,13 +96,14 @@ class CloudSyncService {
    */
   async pullUserData(email: string): Promise<CloudUserData | null> {
     const cleanEmail = email.trim().toLowerCase();
+    const isFounder = isFounderEmail(cleanEmail);
     let result: CloudUserData | null = null;
 
     // 1. Fetch from server sync endpoint (which also queries Supabase)
     try {
       const res = await fetch(`${this.baseUrl}/pull?email=${encodeURIComponent(cleanEmail)}`);
       if (res.ok) {
-        const data = await res.json();
+        const data = await safeJson<any>(res);
         if (data && data.success && data.userData) {
           result = data.userData;
         }
@@ -111,7 +123,7 @@ class CloudSyncService {
         result = {
           email: cleanEmail,
           name: supaProfile?.name || cleanEmail.split('@')[0],
-          tier: 'free',
+          tier: isFounder ? 'vip' : 'free',
           updatedAt: supaProfile?.updatedAt || '1970-01-01T00:00:00.000Z',
         };
       }
@@ -125,6 +137,11 @@ class CloudSyncService {
       }
     } catch (err) {
       console.warn('Notice during client Supabase pull:', err);
+    }
+
+    // Guard founder status
+    if (result && isFounder) {
+      result.tier = 'vip';
     }
 
     return result;
@@ -174,8 +191,8 @@ class CloudSyncService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const json = await res.json();
-      return Boolean(json.success);
+      const json = await safeJson<{ success?: boolean }>(res);
+      return Boolean(json?.success);
     } catch (err) {
       console.warn('Cloud push network notice:', err);
       return false;
@@ -254,8 +271,8 @@ class CloudSyncService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
-      const data = await res.json();
-      return data.code || null;
+      const data = await safeJson<{ code?: string }>(res);
+      return data?.code || null;
     } catch {
       return null;
     }
@@ -271,8 +288,8 @@ class CloudSyncService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: code.trim().toUpperCase() }),
       });
-      const data = await res.json();
-      if (data.success && data.userData) {
+      const data = await safeJson<{ success?: boolean; userData?: CloudUserData }>(res);
+      if (data?.success && data?.userData) {
         return data.userData;
       }
       return null;

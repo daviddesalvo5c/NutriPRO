@@ -18,6 +18,17 @@ export const FOUNDER_EMAIL = 'daviddesalvo.5c@gmail.com';
 export const FOUNDER_PASSWORD = 'minplan13';
 export const FOUNDER_NAME = 'David De Salvo';
 
+export function isFounderEmail(email?: string | null): boolean {
+  if (!email) return false;
+  const clean = email.trim().toLowerCase();
+  return clean === FOUNDER_EMAIL.toLowerCase() || clean === 'daviddesalvo.5c@gmail.com';
+}
+
+if (typeof window !== 'undefined') {
+  (window as any).isFounderEmail = isFounderEmail;
+  (window as any).FOUNDER_EMAIL = FOUNDER_EMAIL;
+}
+
 const USERS_REGISTRY_KEY = 'nutrifit_registered_users_v1';
 const ACTIVE_SESSION_KEY = 'nutrifit_active_session_v1';
 
@@ -222,6 +233,10 @@ export function loadActiveSession(): UserSession | null {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && parsed.email) {
+        if (isFounderEmail(parsed.email)) {
+          parsed.isFounder = true;
+          parsed.tier = 'vip';
+        }
         return parsed as UserSession;
       }
     }
@@ -233,6 +248,10 @@ export function loadActiveSession(): UserSession | null {
 
 export function saveActiveSession(session: UserSession): void {
   try {
+    if (isFounderEmail(session.email)) {
+      session.isFounder = true;
+      session.tier = 'vip';
+    }
     localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(session));
   } catch (err) {
     console.error('Error saving active session:', err);
@@ -485,11 +504,6 @@ export function saveThemePreference(theme: 'dark' | 'light'): void {
 const TRANSACTIONS_KEY = 'nutrifit_transactions_v1';
 const VIP_INVITES_KEY = 'nutrifit_vip_invites_v1';
 
-export function isFounderEmail(email?: string | null): boolean {
-  if (!email) return false;
-  return email.trim().toLowerCase() === FOUNDER_EMAIL.toLowerCase();
-}
-
 export function getUserTrialInfo(email: string): {
   isTrialActive: boolean;
   daysRemaining: number;
@@ -615,10 +629,12 @@ export function setUserTier(
   userName?: string
 ): void {
   const normalized = email.trim().toLowerCase();
+  // El fundador nunca puede ser degradado de VIP
+  const effectiveTier: SubscriptionTier = isFounderEmail(normalized) ? 'vip' : tier;
   const subKey = getUserStorageKey('nutrifit_user_sub', normalized);
   
   const subData = {
-    tier,
+    tier: effectiveTier,
     billingCycle,
     updatedAt: new Date().toISOString(),
   };
@@ -628,7 +644,10 @@ export function setUserTier(
   const users = loadRegisteredUsers();
   const index = users.findIndex((u) => u.email.toLowerCase() === normalized);
   if (index !== -1) {
-    users[index].tier = tier;
+    users[index].tier = effectiveTier;
+    if (isFounderEmail(normalized)) {
+      users[index].isFounder = true;
+    }
     users[index].subscribedAt = new Date().toISOString();
     saveRegisteredUsers(users);
   }

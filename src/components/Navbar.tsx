@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { UserProfile, UserSession, SubscriptionTier } from '../types';
 import { getProfileCalculations } from '../utils/nutritionCalculations';
+import { isFounderEmail } from '../utils/storage';
 import { BrandLogo } from './BrandLogo';
 
 export type AppTab = 'diary' | 'foods' | 'activity' | 'scanner' | 'planner' | 'progress' | 'profile';
@@ -216,7 +217,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {/* VIP / Pro / Plans Badge Button (Mercado Pago Argentina) */}
               {onOpenPlansModal && (
                 <>
-                  {currentTier === 'vip' || session?.isFounder ? (
+                  {currentTier === 'vip' || session?.isFounder || isFounderEmail(session?.email) || isFounderEmail(profile?.email) ? (
                     <button
                       type="button"
                       id="topbar-vip-badge-btn"

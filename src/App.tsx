@@ -67,7 +67,8 @@ import {
   loadActivityLogsForUser,
   saveActivityLogsForUser,
   loadDiscountActivityCaloriesPreference,
-  saveDiscountActivityCaloriesPreference
+  saveDiscountActivityCaloriesPreference,
+  isFounderEmail
 } from './utils/storage';
 
 export default function App() {
@@ -123,7 +124,9 @@ export default function App() {
   const [isPlansModalOpen, setIsPlansModalOpen] = useState<boolean>(false);
   const [currentTier, setCurrentTier] = useState<SubscriptionTier>(() => {
     const initialSession = loadActiveSession();
-    return initialSession ? getUserTier(initialSession.email) : 'free';
+    if (!initialSession) return 'free';
+    if (isFounderEmail(initialSession.email)) return 'vip';
+    return getUserTier(initialSession.email);
   });
 
   // User-isolated profile state
@@ -206,10 +209,13 @@ export default function App() {
           }
           const email = sbSession.user.email || '';
           const name = sbSession.user.user_metadata?.full_name || email.split('@')[0];
+          const isFounder = isFounderEmail(email);
           const newSess: UserSession = {
             email,
             name,
             userId: sbSession.user.id,
+            isFounder,
+            tier: isFounder ? 'vip' : 'free',
             loginTime: new Date().toISOString(),
           };
           saveActiveSession(newSess);
@@ -223,10 +229,13 @@ export default function App() {
         setSession((prev) => {
           const email = sbSession.user.email || '';
           const name = sbSession.user.user_metadata?.full_name || email.split('@')[0];
+          const isFounder = isFounderEmail(email);
           const updated: UserSession = {
             email,
             name,
             userId: sbSession.user.id,
+            isFounder,
+            tier: isFounder ? 'vip' : 'free',
             loginTime: prev?.loginTime || new Date().toISOString(),
           };
           saveActiveSession(updated);
@@ -246,6 +255,7 @@ export default function App() {
 
     const email = session.email;
     const userId = session.userId || emailToUuid(email);
+    const isFounder = isFounderEmail(email);
 
     // 1. Instant local load from device storage
     const userProfile = loadStoredProfileForUser(email, session.name);
@@ -263,11 +273,17 @@ export default function App() {
     setWeightHistory(userWeights);
     setMeasurements(userMeasurements);
     setProgressPhotos(userPhotos);
-    setCurrentTier(getUserTier(email));
+    setCurrentTier(isFounder ? 'vip' : getUserTier(email));
 
     // Subscription & VIP tier synchronization from Supabase / Cloud
     supabaseCheckUserSubscription(email, userId)
       .then((remoteTier) => {
+        if (isFounder) {
+          setCurrentTier('vip');
+          setUserTier(email, 'vip');
+          grantVipToUser(email);
+          return;
+        }
         if (remoteTier) {
           setCurrentTier(remoteTier);
           setUserTier(email, remoteTier);
@@ -382,8 +398,9 @@ export default function App() {
           saveMeasurementsForUser(email, cloudData.measurements);
         }
         if (cloudData.tier) {
-          setCurrentTier(cloudData.tier);
-          setUserTier(email, cloudData.tier);
+          const effectiveTier = isFounder ? 'vip' : cloudData.tier;
+          setCurrentTier(effectiveTier);
+          setUserTier(email, effectiveTier);
         }
       }
     }).catch((err) => console.warn('Cloud sync pull notice:', err));

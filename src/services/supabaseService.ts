@@ -38,6 +38,16 @@ export function emailToUuid(email: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+async function safeResJson<T = any>(res: Response): Promise<T | null> {
+  try {
+    const text = await res.text();
+    if (!text || text.trim() === '') return null;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
 // Cached active table representations in Supabase
 let cachedFoodTable: 'food_logs' | 'food_items' | null = null;
 let cachedUsersTable: 'profiles' | 'users' | null = null;
@@ -223,8 +233,8 @@ export async function supabaseLogin(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: cleanEmail, password: cleanPassword }),
       });
-      const data = await res.json();
-      if (res.ok && data.success && data.user) {
+      const data = await safeResJson<{ success?: boolean; user?: any; message?: string }>(res);
+      if (res.ok && data?.success && data?.user) {
         // Now that server confirmed or synced, retry client-side signIn if possible
         try {
           await supabase.auth.signInWithPassword({
@@ -245,7 +255,7 @@ export async function supabaseLogin(
         };
         return { success: true, user: authUser };
       } else if (!res.ok) {
-        return { success: false, message: data.message || 'Credenciales incorrectas.' };
+        return { success: false, message: data?.message || 'Credenciales incorrectas.' };
       }
     } catch (serverErr) {
       console.warn('Notice trying server auth login:', serverErr);
@@ -304,8 +314,8 @@ export async function supabaseRegister(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: cleanName, email: cleanEmail, password: cleanPassword }),
       });
-      const data = await res.json();
-      if (res.ok && data.success && data.user) {
+      const data = await safeResJson<{ success?: boolean; user?: any }>(res);
+      if (res.ok && data?.success && data?.user) {
         userUuid = data.user.id;
       }
     } catch (e) {
@@ -850,8 +860,8 @@ export async function supabaseGrantVip(
       body: JSON.stringify({ targetEmail: cleanEmail, requesterEmail: invitedBy }),
     });
     if (res.ok) {
-      const data = await res.json();
-      return { success: true, message: data.message || `Rango VIP otorgado a ${cleanEmail}` };
+      const data = await safeResJson<{ success?: boolean; message?: string }>(res);
+      return { success: true, message: data?.message || `Rango VIP otorgado a ${cleanEmail}` };
     }
   } catch (apiErr) {
     console.warn('Notice calling /api/founder/users/grant-vip:', apiErr);
@@ -913,8 +923,8 @@ export async function supabaseRevokeVip(
       body: JSON.stringify({ targetEmail: cleanEmail, requesterEmail }),
     });
     if (res.ok) {
-      const data = await res.json();
-      return { success: true, message: data.message || `Rango VIP revocado para ${cleanEmail}` };
+      const data = await safeResJson<{ success?: boolean; message?: string }>(res);
+      return { success: true, message: data?.message || `Rango VIP revocado para ${cleanEmail}` };
     }
   } catch (apiErr) {
     console.warn('Notice calling /api/founder/users/revoke-vip:', apiErr);
@@ -969,9 +979,9 @@ export async function supabaseCheckUserSubscription(
   try {
     const res = await fetch(`/api/sync/pull?email=${encodeURIComponent(cleanEmail)}`);
     if (res.ok) {
-      const data = await res.json();
+      const data = await safeResJson<any>(res);
       if (data?.userData?.tier) {
-        return data.userData.tier as SubscriptionTier;
+        return isFounderEmail(cleanEmail) ? 'vip' : (data.userData.tier as SubscriptionTier);
       }
     }
   } catch {

@@ -52,8 +52,11 @@ export async function downscaleImage(source: File | string): Promise<string> {
     const ctx = canvas.getContext('2d');
     if (!ctx) return original;
 
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', QUALITY);
+    return canvas.toDataURL('image/jpeg', 0.90);
   } catch (error) {
     console.error('[downscaleImage] no se pudo reducir:', error);
     return typeof source === 'string' ? source : '';
