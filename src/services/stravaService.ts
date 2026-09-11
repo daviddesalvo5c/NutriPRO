@@ -32,11 +32,11 @@ export function getStoredStravaConfig(): StravaAuthConfig {
   }
   return {
     clientId: '278644', // Default Strava Application Client ID
-    clientSecret: '',
-    accessToken: null,
+    clientSecret: '2b34bc09174ce8ca3d159e60b4b1f17e691b7da2',
+    accessToken: '392a6d85e37cf57255860e59fd7042b9146317da',
     refreshToken: null,
-    expiresAt: null,
-    athleteName: null,
+    expiresAt: 1789152798,
+    athleteName: 'David De Salvo',
   };
 }
 

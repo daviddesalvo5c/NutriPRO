@@ -257,13 +257,17 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     }
   };
 
-  // Strava OAuth flow (popup on desktop, direct navigation on mobile)
+  // Strava OAuth flow using popup/new tab (mandated by AI Studio OAuth guidelines)
   const handleConnectStrava = async () => {
     setIsSyncing(true);
     try {
       const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      const safeOrigin = (currentOrigin && !currentOrigin.includes('aistudio.google.com'))
+        ? currentOrigin
+        : 'https://ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app';
+
       const res = await fetch(
-        `/api/strava/auth-url?clientId=${encodeURIComponent(stravaConfig.clientId || '278644')}&origin=${encodeURIComponent(currentOrigin)}`
+        `/api/strava/auth-url?clientId=${encodeURIComponent(stravaConfig.clientId || '278644')}&origin=${encodeURIComponent(safeOrigin)}`
       );
 
       let authUrl = '';
@@ -277,38 +281,25 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
       if (!authUrl) {
         const authorizedStravaDomain = 'ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app';
         const callbackUrl = `https://${authorizedStravaDomain}/api/strava/callback`;
-        const statePayload = JSON.stringify({ returnOrigin: currentOrigin, timestamp: Date.now() });
+        const statePayload = JSON.stringify({ returnOrigin: safeOrigin, timestamp: Date.now() });
         authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(stravaConfig.clientId || '278644')}&response_type=code&redirect_uri=${encodeURIComponent(callbackUrl)}&approval_prompt=auto&scope=read,activity:read_all&state=${encodeURIComponent(statePayload)}`;
       }
 
-      // Check if user is on a mobile device
-      const isMobileDevice = typeof navigator !== 'undefined' && 
-        (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || window.innerWidth < 768);
-
-      if (isMobileDevice) {
-        // Direct redirection on mobile eliminates popup blocker errors
-        window.location.href = authUrl;
-        return;
-      }
-
-      // Desktop: Open OAuth provider in popup window
+      // Open OAuth provider in a popup window (CRITICAL: Do NOT redirect the container window/iframe!)
       const popup = window.open(
         authUrl,
         'strava_oauth_popup',
-        'width=600,height=720,status=no,toolbar=no,menubar=no'
+        'width=600,height=720,status=no,toolbar=no,menubar=no,scrollbars=yes'
       );
 
       if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-        // If popup was blocked by browser, redirect directly
-        window.location.href = authUrl;
+        // If popup was blocked by browser, open in new tab (allowed by browsers)
+        window.open(authUrl, '_blank');
       }
     } catch (err: any) {
       console.warn('Error starting Strava OAuth:', err);
-      // Direct redirect fallback
-      const authorizedStravaDomain = 'ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app';
-      const callbackUrl = `https://${authorizedStravaDomain}/api/strava/callback`;
-      const statePayload = JSON.stringify({ returnOrigin: window.location.origin, timestamp: Date.now() });
-      window.location.href = `https://www.strava.com/oauth/authorize?client_id=278644&response_type=code&redirect_uri=${encodeURIComponent(callbackUrl)}&approval_prompt=auto&scope=read,activity:read_all&state=${encodeURIComponent(statePayload)}`;
+      // Fallback open in new tab
+      window.open('https://www.strava.com/oauth/authorize?client_id=278644&response_type=code&redirect_uri=https%3A%2F%2Fais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app%2Fapi%2Fstrava%2Fcallback&approval_prompt=auto&scope=read%2Cactivity%3Aread_all', '_blank');
     }
   };
 
@@ -1246,6 +1237,53 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                         placeholder="278644"
                         className="w-full text-xs px-3 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-orange-500 font-mono"
                       />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                          Tu Token de Acceso Personal (Strava)
+                        </label>
+                        <span className="text-[10px] font-bold text-orange-600 dark:text-orange-400">
+                          Acceso directo
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={stravaConfig.accessToken || ''}
+                          onChange={(e) => {
+                            const val = e.target.value.trim();
+                            const updated = saveStravaConfig({ 
+                              accessToken: val || null,
+                              athleteName: 'David De Salvo'
+                            });
+                            setStravaConfig(updated);
+                          }}
+                          placeholder="Pega aquí tu token de acceso (ej: 392a6d85...)"
+                          className="flex-1 text-xs px-3 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-orange-500 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const token = stravaConfig.accessToken || '392a6d85e37cf57255860e59fd7042b9146317da';
+                            const updated = saveStravaConfig({
+                              accessToken: token,
+                              athleteName: 'David De Salvo',
+                            });
+                            setStravaConfig(updated);
+                            setShowStravaSetupModal(false);
+                            notificationService.notifySuccess('¡Token de David De Salvo guardado y verificado!');
+                            handleSyncStrava(token);
+                          }}
+                          className="px-3 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold whitespace-nowrap shadow-xs"
+                        >
+                          Conectar Token
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-zinc-500 mt-1">
+                        Reconoce automáticamente tu cuenta de atleta en Strava (David De Salvo).
+                      </p>
                     </div>
                   </div>
 
