@@ -74,6 +74,7 @@ interface ActivitySectionProps {
   ) => void;
   discountCalories: boolean;
   onToggleDiscountCalories: (enabled: boolean) => void;
+  userEmail?: string;
 }
 
 export const ActivitySection: React.FC<ActivitySectionProps> = ({
@@ -86,6 +87,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   onUpdateSyncData,
   discountCalories,
   onToggleDiscountCalories,
+  userEmail,
 }) => {
   // Current day activity log
   const currentDayLog: ActivityDayLog = useMemo(() => {
@@ -104,7 +106,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
-  const [stravaConfig, setStravaConfig] = useState(() => getStoredStravaConfig());
+  const [stravaConfig, setStravaConfig] = useState(() => getStoredStravaConfig(userEmail));
   const [showStravaSetupModal, setShowStravaSetupModal] = useState<boolean>(false);
   const [isXiaomiModalOpen, setIsXiaomiModalOpen] = useState<boolean>(false);
   const [activeIntegrationTab, setActiveIntegrationTab] = useState<'xiaomi' | 'google_fit' | 'strava' | 'health_connect'>(() => {
@@ -113,6 +115,11 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [isHealthConnectActive, setIsHealthConnectActive] = useState<boolean>(() => {
     return localStorage.getItem('nutrifit_health_connect_active') === 'true';
   });
+
+  // Re-sync stravaConfig if userEmail changes
+  useEffect(() => {
+    setStravaConfig(getStoredStravaConfig(userEmail));
+  }, [userEmail]);
 
   // Listen for OAuth messages from popup window & handle mobile redirect return
   useEffect(() => {
@@ -135,13 +142,13 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             refreshToken: refresh,
             expiresAt: Number(expires) || (Math.floor(Date.now() / 1000) + 21600),
             athleteName: athlete ? decodeURIComponent(athlete) : 'David (Strava)',
-          });
+          }, userEmail);
           setStravaConfig(updated);
           setActiveIntegrationTab('strava');
           notificationService.notifySuccess('¡Strava vinculado con éxito en tu móvil!');
           handleSyncStrava(token);
         } else {
-          const stored = getStoredStravaConfig();
+          const stored = getStoredStravaConfig(userEmail);
           if (stored.accessToken) {
             setStravaConfig(stored);
             setActiveIntegrationTab('strava');
@@ -176,7 +183,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             refreshToken: payload.refreshToken,
             expiresAt: payload.expiresAt,
             athleteName: payload.athlete ? `${payload.athlete.firstname || ''} ${payload.athlete.lastname || ''}`.trim() : 'Atleta Strava',
-          });
+          }, userEmail);
           setStravaConfig(updated);
           setIsSyncing(false);
           notificationService.notifySuccess('¡Strava conectado con éxito! Sincronizando entrenamientos...');
@@ -232,7 +239,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
           refreshToken: data.refreshToken,
           expiresAt: data.expiresAt,
           athleteName: data.athlete ? `${data.athlete.firstname} ${data.athlete.lastname}` : 'Atleta Strava',
-        });
+        }, userEmail);
         setStravaConfig(updated);
         notificationService.notifySuccess('¡Strava conectado! Importando entrenamientos...');
         handleSyncStrava(data.accessToken);
@@ -248,7 +255,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         refreshToken: 'strava_local_refresh',
         expiresAt: Math.floor(Date.now() / 1000) + 86400,
         athleteName: 'Atleta Strava (Modo Activo)',
-      });
+      }, userEmail);
       setStravaConfig(updated);
       notificationService.notifySuccess('¡Strava vinculado en modo directo!');
       handleSyncStrava(mockAccessToken);
@@ -1231,7 +1238,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                         type="text"
                         value={stravaConfig.clientId || '278644'}
                         onChange={(e) => {
-                          const updated = saveStravaConfig({ clientId: e.target.value.trim() });
+                          const updated = saveStravaConfig({ clientId: e.target.value.trim() }, userEmail);
                           setStravaConfig(updated);
                         }}
                         placeholder="278644"
@@ -1257,7 +1264,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                             const updated = saveStravaConfig({ 
                               accessToken: val || null,
                               athleteName: 'David De Salvo'
-                            });
+                            }, userEmail);
                             setStravaConfig(updated);
                           }}
                           placeholder="Pega aquí tu token de acceso (ej: 392a6d85...)"
@@ -1270,7 +1277,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                             const updated = saveStravaConfig({
                               accessToken: token,
                               athleteName: 'David De Salvo',
-                            });
+                            }, userEmail);
                             setStravaConfig(updated);
                             setShowStravaSetupModal(false);
                             notificationService.notifySuccess('¡Token de David De Salvo guardado y verificado!');

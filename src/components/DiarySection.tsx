@@ -370,6 +370,7 @@ export const DiarySection: React.FC<DiarySectionProps> = ({
       <StreakGamificationCard
         dailyLogs={dailyLogs}
         profile={profile}
+        userEmail={userEmail}
         onOpenReport={() => setIsReportModalOpen(true)}
       />
 

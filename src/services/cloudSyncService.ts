@@ -34,6 +34,10 @@ export interface CloudUserData {
   tier: SubscriptionTier;
   profile?: UserProfile;
   dailyLogs?: Record<string, DailyLog>;
+  activityLogs?: Record<string, any>;
+  discountActivityCalories?: boolean;
+  stravaConfig?: any;
+  streakStats?: any;
   weightHistory?: WeightEntry[];
   measurements?: BodyMeasurementEntry[];
   progressPhotos?: ProgressPhotoEntry[];
@@ -148,13 +152,17 @@ class CloudSyncService {
   }
 
   /**
-   * Push full or partial user state to Supabase and the cloud
+   * Push full or partial user state to Supabase and the cloud (Total Sync PC <-> Mobile)
    */
   async pushUserData(payload: {
     email: string;
     name?: string;
     profile?: UserProfile;
     dailyLogs?: Record<string, DailyLog>;
+    activityLogs?: Record<string, any>;
+    stravaConfig?: any;
+    discountActivityCalories?: boolean;
+    streakStats?: any;
     weightHistory?: WeightEntry[];
     measurements?: BodyMeasurementEntry[];
     progressPhotos?: ProgressPhotoEntry[];
@@ -184,7 +192,7 @@ class CloudSyncService {
       console.warn('Client notice preparing Supabase sync:', err);
     }
 
-    // 2. Server-side sync endpoint
+    // 2. Server-side sync endpoint (Synchronizes entire bundle across all devices)
     try {
       const res = await fetch(`${this.baseUrl}/push`, {
         method: 'POST',
@@ -195,6 +203,29 @@ class CloudSyncService {
       return Boolean(json?.success);
     } catch (err) {
       console.warn('Cloud push network notice:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Update discipline ranking on the community leaderboard
+   */
+  async updateLeaderboard(payload: {
+    email: string;
+    name?: string;
+    currentStreak: number;
+    bestStreak: number;
+    complianceRate: number;
+  }): Promise<boolean> {
+    try {
+      const res = await fetch('/api/leaderboard/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await safeJson<{ success?: boolean }>(res);
+      return Boolean(json?.success);
+    } catch {
       return false;
     }
   }

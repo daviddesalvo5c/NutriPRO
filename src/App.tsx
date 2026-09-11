@@ -10,6 +10,8 @@ import { ActivitySection } from './components/ActivitySection';
 import { AuthView } from './components/AuthView';
 import { SubscriptionPlansModal } from './components/SubscriptionPlansModal';
 import { PWAInstallModal } from './components/PWAInstallModal';
+import { LeaderboardModal } from './components/LeaderboardModal';
+import { calculateStreakStats } from './utils/streakCalculations';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import { ToastContainer } from './components/ToastContainer';
 import { notificationService } from './utils/notificationService';
@@ -28,6 +30,7 @@ import {
 } from './services/supabaseService';
 import { supabase } from './lib/supabase';
 import { cloudSyncService } from './services/cloudSyncService';
+import { saveStravaConfig } from './services/stravaService';
 import { 
   DailyLog, 
   FoodItem, 
@@ -122,6 +125,7 @@ export default function App() {
 
   // Subscription plan & modal state
   const [isPlansModalOpen, setIsPlansModalOpen] = useState<boolean>(false);
+  const [isLeaderboardOpen, setIsLeaderboardOpen] = useState<boolean>(false);
   const [currentTier, setCurrentTier] = useState<SubscriptionTier>(() => {
     const initialSession = loadActiveSession();
     if (!initialSession) return 'free';
@@ -407,6 +411,23 @@ export default function App() {
           setMeasurements(cloudData.measurements);
           saveMeasurementsForUser(email, cloudData.measurements);
         }
+        if (cloudData.activityLogs && Object.keys(cloudData.activityLogs).length > 0) {
+          setActivityLogs((prev) => {
+            const merged = { ...prev, ...cloudData.activityLogs };
+            saveActivityLogsForUser(email, merged);
+            return merged;
+          });
+        }
+        if (typeof cloudData.discountActivityCalories === 'boolean') {
+          setDiscountActivityCalories(cloudData.discountActivityCalories);
+          saveDiscountActivityCaloriesPreference(email, cloudData.discountActivityCalories);
+        }
+        if (cloudData.stravaConfig && cloudData.stravaConfig.accessToken) {
+          try {
+            saveStravaConfig(cloudData.stravaConfig, email);
+            localStorage.setItem('nutrifit_active_activity_tab', 'strava');
+          } catch {}
+        }
         if (cloudData.tier) {
           const effectiveTier = isFounder ? 'vip' : cloudData.tier;
           setCurrentTier(effectiveTier);
@@ -415,11 +436,49 @@ export default function App() {
       }
     }).catch((err) => console.warn('Cloud sync pull notice:', err));
 
+    // Real-time synchronization across devices (Mobile <-> PC):
+    // Whenever the user switches back to this window or tab, pull the latest state
+    const handleRecheckSync = () => {
+      cloudSyncService.pullUserData(email).then((cloudData) => {
+        if (!cloudData) return;
+        if (cloudData.dailyLogs && Object.keys(cloudData.dailyLogs).length > 0) {
+          setDailyLogs((prev) => {
+            const merged = { ...prev, ...cloudData.dailyLogs };
+            saveDailyLogsForUser(email, merged);
+            return merged;
+          });
+        }
+        if (cloudData.activityLogs && Object.keys(cloudData.activityLogs).length > 0) {
+          setActivityLogs((prev) => {
+            const merged = { ...prev, ...cloudData.activityLogs };
+            saveActivityLogsForUser(email, merged);
+            return merged;
+          });
+        }
+        if (typeof cloudData.discountActivityCalories === 'boolean') {
+          setDiscountActivityCalories(cloudData.discountActivityCalories);
+        }
+        if (cloudData.stravaConfig && cloudData.stravaConfig.accessToken) {
+          saveStravaConfig(cloudData.stravaConfig, email);
+        }
+      }).catch(() => {});
+    };
+
+    window.addEventListener('focus', handleRecheckSync);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleRecheckSync();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     // Check browser periodic notifications
     notificationService.schedulePeriodicReminders();
 
     return () => {
       unsubscribeRealtime();
+      window.removeEventListener('focus', handleRecheckSync);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [session?.email, session?.userId]);
 
@@ -862,6 +921,11 @@ export default function App() {
       };
       const updatedLogs = { ...prev, [date]: updatedDay };
       saveActivityLogsForUser(session.email, updatedLogs);
+      cloudSyncService.pushUserData({
+        email: session.email,
+        activityLogs: updatedLogs,
+        discountActivityCalories,
+      }).catch(() => {});
       return updatedLogs;
     });
   };
@@ -877,6 +941,11 @@ export default function App() {
       };
       const updatedLogs = { ...prev, [date]: updatedDay };
       saveActivityLogsForUser(session.email, updatedLogs);
+      cloudSyncService.pushUserData({
+        email: session.email,
+        activityLogs: updatedLogs,
+        discountActivityCalories,
+      }).catch(() => {});
       return updatedLogs;
     });
   };
@@ -909,6 +978,11 @@ export default function App() {
       };
       const updatedLogs = { ...prev, [date]: updatedDay };
       saveActivityLogsForUser(session.email, updatedLogs);
+      cloudSyncService.pushUserData({
+        email: session.email,
+        activityLogs: updatedLogs,
+        discountActivityCalories,
+      }).catch(() => {});
       return updatedLogs;
     });
   };
@@ -917,6 +991,10 @@ export default function App() {
     if (!session) return;
     setDiscountActivityCalories(enabled);
     saveDiscountActivityCaloriesPreference(session.email, enabled);
+    cloudSyncService.pushUserData({
+      email: session.email,
+      discountActivityCalories: enabled,
+    }).catch(() => {});
   };
 
   // Calculate total activity burned for the selected date
@@ -959,6 +1037,7 @@ export default function App() {
         onOpenPlansModal={() => setIsPlansModalOpen(true)}
         onOpenInstallPrompt={openPromptManually}
         isInstallable={!isInstalled && (isInstallable || isIOS)}
+        onOpenLeaderboard={() => setIsLeaderboardOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -1009,6 +1088,7 @@ export default function App() {
             onUpdateSyncData={handleUpdateSyncData}
             discountCalories={discountActivityCalories}
             onToggleDiscountCalories={handleToggleDiscountCalories}
+            userEmail={session.email}
           />
         )}
 
@@ -1097,6 +1177,15 @@ export default function App() {
         onClose={closePrompt}
         onInstall={install}
         isIOS={isIOS}
+      />
+
+      {/* Community Leaderboard & Military Escalafón Modal */}
+      <LeaderboardModal
+        isOpen={isLeaderboardOpen}
+        onClose={() => setIsLeaderboardOpen(false)}
+        currentUserStreak={calculateStreakStats(dailyLogs, profile).currentStreak}
+        currentUserName={profile.name || session?.name || 'David De Salvo'}
+        currentUserEmail={session?.email || 'daviddesalvo.5c@gmail.com'}
       />
 
       {/* Global In-App Toast Notification Center */}

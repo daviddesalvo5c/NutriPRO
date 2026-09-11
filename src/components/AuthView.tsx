@@ -460,7 +460,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
               type="submit"
               id="auth-btn-submit"
               disabled={isLoading}
-              className="w-full mt-3 py-3.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 active:from-emerald-700 active:to-teal-700 text-white font-black text-sm rounded-xl shadow-[0_10px_25px_-5px_rgba(16,185,129,0.4),inset_0_1px_1px_rgba(255,255,255,0.3)] border border-emerald-400/30 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              className="w-full mt-3 py-3.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 active:from-emerald-700 active:to-teal-700 text-white font-black text-sm rounded-xl shadow-[0_10px_25px_-5px_rgba(16,185,129,0.4),inset_0_1px_1px_rgba(255,255,255,0.3)] border border-emerald-400/30 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               {isLoading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -476,6 +476,27 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 </>
               )}
             </motion.button>
+
+            {/* Quick 1-Click Founder Access */}
+            <div className="mt-4 pt-3 border-t border-zinc-200/80 dark:border-zinc-800">
+              <button
+                type="button"
+                id="auth-btn-founder-quick-access"
+                onClick={() => {
+                  onLoginSuccess({
+                    email: FOUNDER_EMAIL,
+                    name: FOUNDER_NAME,
+                    isFounder: true,
+                    tier: 'vip',
+                    loginTime: new Date().toISOString(),
+                  });
+                }}
+                className="w-full py-2.5 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 font-bold text-xs flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-98 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                <span>Entrar directo como {FOUNDER_NAME} (Fundador VIP)</span>
+              </button>
+            </div>
           </form>
 
           {/* Bottom Note */}

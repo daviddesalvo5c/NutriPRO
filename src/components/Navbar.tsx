@@ -15,7 +15,8 @@ import {
   ChefHat,
   TrendingUp,
   Crown,
-  Smartphone
+  Smartphone,
+  Trophy
 } from 'lucide-react';
 import { UserProfile, UserSession, SubscriptionTier } from '../types';
 import { getProfileCalculations } from '../utils/nutritionCalculations';
@@ -37,6 +38,7 @@ interface NavbarProps {
   onOpenPlansModal?: () => void;
   onOpenInstallPrompt?: () => void;
   isInstallable?: boolean;
+  onOpenLeaderboard?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -52,6 +54,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenPlansModal,
   onOpenInstallPrompt,
   isInstallable = false,
+  onOpenLeaderboard,
 }) => {
   const calculations = getProfileCalculations(profile);
 
@@ -201,10 +204,37 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <User className="w-3.5 h-3.5" />
                 <span>Perfil</span>
               </button>
+
+              {onOpenLeaderboard && (
+                <button
+                  type="button"
+                  id="header-nav-leaderboard"
+                  onClick={onOpenLeaderboard}
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-100/60 dark:hover:bg-amber-950/40"
+                  title="Ver Escalafón Militar y Tabla de Clasificación"
+                >
+                  <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Rangos & Ranking</span>
+                </button>
+              )}
             </nav>
 
             {/* Top Bar: User Goal Pill, VIP/Plans Badge, Theme Toggle & Session Logout */}
             <div className="flex items-center gap-2">
+              {/* Leaderboard Quick Button */}
+              {onOpenLeaderboard && (
+                <button
+                  type="button"
+                  id="topbar-leaderboard-btn"
+                  onClick={onOpenLeaderboard}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 text-zinc-950 text-xs font-black shadow-sm shadow-amber-500/20 hover:scale-105 active:scale-95 transition-all border border-amber-300 cursor-pointer"
+                  title="✦ Ver Escalafón Militar y Clasificación de Atletas"
+                >
+                  <Trophy className="w-3.5 h-3.5 text-zinc-950" />
+                  <span className="tracking-tight">Rangos</span>
+                </button>
+              )}
+
               {/* Quick Calories Goal Display */}
               <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-xl bg-zinc-100 dark:bg-zinc-800/90 border border-zinc-200/70 dark:border-zinc-700/70 text-xs font-bold text-zinc-700 dark:text-zinc-300">
                 <Flame className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
