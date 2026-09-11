@@ -59,6 +59,15 @@ export default defineConfig(() => {
           enabled: true,
           type: 'module',
         },
+        workbox: {
+          navigateFallbackDenylist: [/^\/api/],
+          runtimeCaching: [
+            {
+              urlPattern: /^\/api\/.*/,
+              handler: 'NetworkOnly',
+            },
+          ],
+        },
       }),
     ],
     resolve: {

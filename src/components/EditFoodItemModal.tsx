@@ -37,24 +37,40 @@ export const EditFoodItemModal: React.FC<EditFoodItemModalProps> = ({
   onDelete,
   userEmail = '',
 }) => {
-  if (!isOpen || !item) return null;
-
-  // Base state
-  const [name, setName] = useState(item.name);
-  const [selectedMeal, setSelectedMeal] = useState<MealType>(item.mealType);
-  const [amountGrams, setAmountGrams] = useState<number>(item.amountGrams || 100);
-  const [portionDesc, setPortionDesc] = useState(item.portionDescription || '');
+  // Base state (safe fallbacks so hooks are called unconditionally)
+  const [name, setName] = useState(item?.name || '');
+  const [selectedMeal, setSelectedMeal] = useState<MealType>(item?.mealType || 'lunch');
+  const [amountGrams, setAmountGrams] = useState<number>(item?.amountGrams || 100);
+  const [portionDesc, setPortionDesc] = useState(item?.portionDescription || '');
   
   // Macros
-  const [calories, setCalories] = useState<number>(Math.round(item.calories));
-  const [protein, setProtein] = useState<number>(roundGrams(item.proteinGrams));
-  const [carbs, setCarbs] = useState<number>(roundGrams(item.carbsGrams));
-  const [fat, setFat] = useState<number>(roundGrams(item.fatGrams));
+  const [calories, setCalories] = useState<number>(item ? Math.round(item.calories) : 0);
+  const [protein, setProtein] = useState<number>(item ? roundGrams(item.proteinGrams) : 0);
+  const [carbs, setCarbs] = useState<number>(item ? roundGrams(item.carbsGrams) : 0);
+  const [fat, setFat] = useState<number>(item ? roundGrams(item.fatGrams) : 0);
   
   // Custom manual edit toggle
   const [isManualOverride, setIsManualOverride] = useState(false);
   const [savedToLibrary, setSavedToLibrary] = useState(false);
   const [duplicateSuccess, setDuplicateSuccess] = useState(false);
+
+  useEffect(() => {
+    if (item) {
+      setName(item.name);
+      setSelectedMeal(item.mealType);
+      setAmountGrams(item.amountGrams || 100);
+      setPortionDesc(item.portionDescription || '');
+      setCalories(Math.round(item.calories));
+      setProtein(roundGrams(item.proteinGrams));
+      setCarbs(roundGrams(item.carbsGrams));
+      setFat(roundGrams(item.fatGrams));
+      setIsManualOverride(false);
+      setSavedToLibrary(false);
+      setDuplicateSuccess(false);
+    }
+  }, [item]);
+
+  if (!isOpen || !item) return null;
 
   // Original per-gram ratios to accurately scale as grams are changed
   const originalGrams = Math.max(1, item.amountGrams || 100);
@@ -62,20 +78,6 @@ export const EditFoodItemModal: React.FC<EditFoodItemModalProps> = ({
   const protPerGram = item.proteinGrams / originalGrams;
   const carbPerGram = item.carbsGrams / originalGrams;
   const fatPerGram = item.fatGrams / originalGrams;
-
-  useEffect(() => {
-    setName(item.name);
-    setSelectedMeal(item.mealType);
-    setAmountGrams(item.amountGrams || 100);
-    setPortionDesc(item.portionDescription || '');
-    setCalories(Math.round(item.calories));
-    setProtein(roundGrams(item.proteinGrams));
-    setCarbs(roundGrams(item.carbsGrams));
-    setFat(roundGrams(item.fatGrams));
-    setIsManualOverride(false);
-    setSavedToLibrary(false);
-    setDuplicateSuccess(false);
-  }, [item]);
 
   const handleGramsChange = (newGrams: number) => {
     const val = Math.max(1, Math.round(newGrams));

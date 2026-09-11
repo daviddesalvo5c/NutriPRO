@@ -20,10 +20,11 @@ export const NutritionReportModal: React.FC<NutritionReportModalProps> = ({
   weightHistory,
   measurements,
 }) => {
+  const printRef = useRef<HTMLDivElement>(null);
+
   if (!isOpen) return null;
 
   const calcs = getProfileCalculations(profile);
-  const printRef = useRef<HTMLDivElement>(null);
 
   const sortedWeights = [...weightHistory].sort(
     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()

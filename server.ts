@@ -1507,7 +1507,7 @@ app.post('/api/strava/token-exchange', async (req, res) => {
 
     const stravaRes = await fetch('https://www.strava.com/oauth/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({
         client_id: cid,
         client_secret: csecret,
@@ -1516,7 +1516,15 @@ app.post('/api/strava/token-exchange', async (req, res) => {
       }),
     });
 
-    const data = await stravaRes.json();
+    const rawText = await stravaRes.text();
+    let data: any = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      console.warn('[Strava Token Exchange] Non-JSON response from Strava API:', rawText);
+      data = { message: 'Respuesta no válida del servicio de Strava.' };
+    }
+
     if (stravaRes.ok && data.access_token) {
       return res.json({
         success: true,
@@ -1527,9 +1535,13 @@ app.post('/api/strava/token-exchange', async (req, res) => {
       });
     }
 
-    return res.status(400).json({ success: false, message: data.message || 'Error autorizando con Strava.' });
+    return res.status(stravaRes.status >= 400 ? stravaRes.status : 400).json({ 
+      success: false, 
+      message: data.message || 'Error autorizando con Strava.' 
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err?.message || 'Error en token exchange de Strava.' });
+    console.error('[Strava Token Exchange Error]:', err);
+    return res.status(500).json({ success: false, message: 'No se pudo conectar con el servicio de Strava.' });
   }
 });
 
@@ -1577,17 +1589,27 @@ app.post('/api/strava/activities', async (req, res) => {
     }
 
     const stravaRes = await fetch('https://www.strava.com/api/v3/athlete/activities?per_page=15', {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
     });
 
-    if (!stravaRes.ok) {
-      return res.status(stravaRes.status).json({ success: false, message: 'Error consultando actividades de Strava.' });
+    const rawActivitiesText = await stravaRes.text();
+    let activities: any = [];
+    try {
+      activities = rawActivitiesText ? JSON.parse(rawActivitiesText) : [];
+    } catch {
+      console.warn('[Strava Activities] Non-JSON response from Strava API:', rawActivitiesText);
+      return res.status(502).json({ success: false, message: 'Respuesta inválida al consultar actividades en Strava.' });
     }
 
-    const activities = await stravaRes.json();
-    return res.json({ success: true, activities });
+    if (!stravaRes.ok) {
+      const errMessage = typeof activities === 'object' && activities.message ? activities.message : 'Error consultando actividades de Strava.';
+      return res.status(stravaRes.status).json({ success: false, message: errMessage });
+    }
+
+    return res.json({ success: true, activities: Array.isArray(activities) ? activities : [] });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err?.message || 'Error al obtener entrenamientos de Strava.' });
+    console.error('[Strava Activities Error]:', err);
+    return res.status(500).json({ success: false, message: 'Error de red al obtener entrenamientos de Strava.' });
   }
 });
 

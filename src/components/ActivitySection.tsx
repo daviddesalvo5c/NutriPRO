@@ -21,13 +21,18 @@ import {
   Clock, 
   Smartphone,
   Check,
-  AlertCircle
+  AlertCircle,
+  Watch,
+  Sliders,
+  Edit3,
+  Info
 } from 'lucide-react';
 import { 
   ActivityDayLog, 
   WorkoutCategory, 
   WorkoutItem, 
-  UserProfile 
+  UserProfile,
+  ConnectedActivityService 
 } from '../types';
 import { 
   ACTIVITY_OPTIONS, 
@@ -48,6 +53,7 @@ import {
   disconnectStrava,
   stravaActivityToWorkoutItem
 } from '../services/stravaService';
+import { XiaomiWatchModal } from './XiaomiWatchModal';
 
 interface ActivitySectionProps {
   profile: UserProfile;
@@ -56,7 +62,14 @@ interface ActivitySectionProps {
   activityLogs: Record<string, ActivityDayLog>;
   onSaveWorkout: (date: string, workout: Omit<WorkoutItem, 'id' | 'date'>) => void;
   onDeleteWorkout: (date: string, workoutId: string) => void;
-  onUpdateSyncData: (date: string, service: 'google_fit' | 'strava' | 'health_connect' | null, steps: number, calories: number) => void;
+  onUpdateSyncData: (
+    date: string, 
+    service: ConnectedActivityService, 
+    steps: number, 
+    calories: number,
+    deviceModel?: string,
+    isCalibratedManually?: boolean
+  ) => void;
   discountCalories: boolean;
   onToggleDiscountCalories: (enabled: boolean) => void;
 }
@@ -90,10 +103,27 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
   const [stravaConfig, setStravaConfig] = useState(() => getStoredStravaConfig());
-  const [activeIntegrationTab, setActiveIntegrationTab] = useState<'google_fit' | 'strava' | 'health_connect'>('google_fit');
+  const [isXiaomiModalOpen, setIsXiaomiModalOpen] = useState<boolean>(false);
+  const [activeIntegrationTab, setActiveIntegrationTab] = useState<'xiaomi' | 'google_fit' | 'strava' | 'health_connect'>(() => {
+    return (localStorage.getItem('nutrifit_active_activity_tab') as any) || 'xiaomi';
+  });
   const [isHealthConnectActive, setIsHealthConnectActive] = useState<boolean>(() => {
     return localStorage.getItem('nutrifit_health_connect_active') === 'true';
   });
+
+  const handleSelectIntegrationTab = (tab: 'xiaomi' | 'google_fit' | 'strava' | 'health_connect') => {
+    setActiveIntegrationTab(tab);
+    localStorage.setItem('nutrifit_active_activity_tab', tab);
+  };
+
+  const handleSaveCalibration = (
+    steps: number,
+    calories: number,
+    deviceModel: string,
+    service: ConnectedActivityService
+  ) => {
+    onUpdateSyncData(selectedDate, service, steps, calories, deviceModel, true);
+  };
 
   const isGoogleFitConnected = currentDayLog.connectedService === 'google_fit' || hasStoredToken;
   const isStravaConnected = Boolean(stravaConfig.accessToken);
@@ -104,14 +134,25 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     try {
       const res = await fetch('/api/strava/token-exchange', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: JSON.stringify({
           code: 'strava_auth_grant_' + Date.now(),
           clientId: stravaConfig.clientId || '153892',
         }),
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (parseErr) {
+        console.warn('Error parsing Strava token exchange response:', parseErr, rawText);
+        throw new Error('No se pudo procesar la respuesta de Strava. Comprueba tu conexión a internet.');
+      }
+
       if (res.ok && data.accessToken) {
         const updated = saveStravaConfig({
           accessToken: data.accessToken,
@@ -127,7 +168,10 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         notificationService.notifyError(data.message || 'No se pudo vincular con Strava.');
       }
     } catch (err: any) {
-      notificationService.notifyError(err.message || 'Error vinculando con Strava.');
+      const msg = err?.message?.toLowerCase?.()?.includes('json')
+        ? 'Error de comunicación al vincular con Strava. Intenta nuevamente.'
+        : err.message || 'Error vinculando con Strava.';
+      notificationService.notifyError(msg);
     } finally {
       setIsSyncing(false);
     }
@@ -147,11 +191,22 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     try {
       const res = await fetch('/api/strava/activities', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: JSON.stringify({ accessToken: token, targetDate: selectedDate }),
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (parseErr) {
+        console.warn('Error parsing Strava activities response:', parseErr, rawText);
+        throw new Error('Respuesta no válida al sincronizar actividades de Strava.');
+      }
+
       if (res.ok && data.activities && Array.isArray(data.activities)) {
         let importedCount = 0;
         let totalStravaCals = 0;
@@ -176,9 +231,14 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         } else {
           notificationService.notifyInfo('Tus actividades de Strava ya están al día.');
         }
+      } else {
+        notificationService.notifyError(data.message || 'No se pudieron recuperar las actividades de Strava.');
       }
     } catch (err: any) {
-      notificationService.notifyError(err.message || 'Error sincronizando actividades de Strava.');
+      const msg = err?.message?.toLowerCase?.()?.includes('json')
+        ? 'Error de formato al sincronizar actividades de Strava.'
+        : err.message || 'Error sincronizando actividades de Strava.';
+      notificationService.notifyError(msg);
     } finally {
       setIsSyncing(false);
     }
@@ -499,16 +559,38 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
               Pasos del Día
             </span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center">
-              <Footprints className="w-4 h-4" />
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                id="btn-open-watch-calibration"
+                onClick={() => setIsXiaomiModalOpen(true)}
+                className="px-2.5 py-1 rounded-xl bg-orange-500/10 hover:bg-orange-500/20 text-orange-600 dark:text-orange-400 text-[11px] font-bold flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+                title="Calibrar pasos exactos de tu pulsera o reloj Xiaomi"
+              >
+                <Watch className="w-3.5 h-3.5" />
+                <span>Calibrar Reloj</span>
+              </button>
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center">
+                <Footprints className="w-4 h-4" />
+              </div>
             </div>
           </div>
           <div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">
-                {totalSteps.toLocaleString()}
-              </span>
-              <span className="text-xs text-zinc-400">/ 10.000 objetivo</span>
+            <div className="flex items-baseline justify-between gap-1.5">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-3xl font-black text-zinc-900 dark:text-zinc-50">
+                  {totalSteps.toLocaleString()}
+                </span>
+                <span className="text-xs text-zinc-400">/ 10.000 objetivo</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsXiaomiModalOpen(true)}
+                className="text-[11px] font-bold text-orange-600 dark:text-orange-400 hover:underline flex items-center gap-0.5 cursor-pointer"
+              >
+                <Edit3 className="w-3 h-3" />
+                <span>{totalSteps > 0 ? 'Ajustar' : 'Cargar pasos'}</span>
+              </button>
             </div>
             {/* Steps mini bar */}
             <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-2 rounded-full overflow-hidden mt-3">
@@ -518,13 +600,27 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
               />
             </div>
             <div className="text-[11px] text-zinc-400 mt-2">
-              {currentDayLog.connectedService ? (
+              {currentDayLog.connectedService === 'xiaomi_watch' || currentDayLog.isCalibratedManually ? (
+                <span className="text-orange-600 dark:text-orange-400 font-semibold flex items-center gap-1">
+                  <Watch className="w-3.5 h-3.5 shrink-0" />
+                  <span>{currentDayLog.deviceModel || 'Reloj Xiaomi / Smartband'} ({syncedCalories} kcal activas)</span>
+                </span>
+              ) : currentDayLog.connectedService === 'google_fit' ? (
                 <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                  Sincronizado vía Google Fit (REST API)
+                  <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
+                  <span>Sincronizado vía Google Fit ({syncedCalories} kcal)</span>
                 </span>
               ) : (
-                <span>Conecta Google Fit para importar tus pasos diarios</span>
+                <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400">
+                  <span>Sin sincronizar</span>
+                  <button 
+                    type="button" 
+                    onClick={() => setIsXiaomiModalOpen(true)}
+                    className="text-orange-600 dark:text-orange-400 font-bold hover:underline"
+                  >
+                    ¿Desfase con tu reloj? Calibra aquí
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -585,8 +681,24 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           <button
             type="button"
-            onClick={() => setActiveIntegrationTab('google_fit')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+            onClick={() => handleSelectIntegrationTab('xiaomi')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              activeIntegrationTab === 'xiaomi'
+                ? 'bg-orange-600 text-white shadow-xs'
+                : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+            }`}
+          >
+            <Watch className="w-3.5 h-3.5" />
+            <span>Xiaomi & Pulseras</span>
+            {(currentDayLog.connectedService === 'xiaomi_watch' || currentDayLog.isCalibratedManually) && (
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-300"></span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSelectIntegrationTab('google_fit')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
               activeIntegrationTab === 'google_fit'
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
@@ -599,8 +711,8 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
 
           <button
             type="button"
-            onClick={() => setActiveIntegrationTab('strava')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+            onClick={() => handleSelectIntegrationTab('strava')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
               activeIntegrationTab === 'strava'
                 ? 'bg-orange-600 text-white shadow-xs'
                 : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
@@ -613,8 +725,8 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
 
           <button
             type="button"
-            onClick={() => setActiveIntegrationTab('health_connect')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+            onClick={() => handleSelectIntegrationTab('health_connect')}
+            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
               activeIntegrationTab === 'health_connect'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
@@ -625,6 +737,98 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             {isHealthConnectActive && <span className="w-1.5 h-1.5 rounded-full bg-indigo-300"></span>}
           </button>
         </div>
+
+        {/* Tab 0: Xiaomi & Smartbands */}
+        {activeIntegrationTab === 'xiaomi' && (
+          <div 
+            id="activity-xiaomi-integration-card"
+            className="border rounded-2xl p-5 sm:p-6 shadow-xs bg-orange-50/30 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/40 transition-all space-y-4"
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-300/40 flex items-center justify-center shadow-xs shrink-0">
+                  <Watch className="w-6 h-6" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
+                      Xiaomi, Amazfit & Smartbands
+                    </h3>
+                    {currentDayLog.connectedService === 'xiaomi_watch' || currentDayLog.isCalibratedManually ? (
+                      <span className="px-2.5 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/60 text-orange-800 dark:text-orange-200 text-[10px] font-black flex items-center gap-1 shrink-0">
+                        <Check className="w-3 h-3 text-orange-600 dark:text-orange-400" />
+                        Calibrado ({currentDayLog.deviceModel || 'Xiaomi'})
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
+                        Ajuste Directo
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-1">
+                    Ideal para Mi Fitness, Zepp Life, Huawei Health y relojes inteligentes. Corrige al instante desfases entre el sensor del móvil y tu muñeca.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0 w-full sm:w-auto">
+                <button
+                  type="button"
+                  id="btn-calibrate-xiaomi-watch"
+                  onClick={() => setIsXiaomiModalOpen(true)}
+                  className="py-2.5 px-5 rounded-xl text-xs font-black bg-orange-600 hover:bg-orange-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  <Watch className="w-4 h-4 text-orange-100 shrink-0" />
+                  <span>Calibrar con mi Reloj</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Panel de estado actual */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="p-3.5 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Pasos sincronizados hoy</span>
+                  <div className="text-lg font-black text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5 mt-0.5">
+                    <Footprints className="w-4 h-4 text-orange-500" />
+                    <span>{totalSteps.toLocaleString()} pasos</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsXiaomiModalOpen(true)}
+                  className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer"
+                >
+                  Editar
+                </button>
+              </div>
+
+              <div className="p-3.5 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Calorías activas descontadas</span>
+                  <div className="text-lg font-black text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5 mt-0.5">
+                    <Flame className="w-4 h-4 text-rose-500" />
+                    <span>{syncedCalories} kcal</span>
+                  </div>
+                </div>
+                <span className="text-[11px] text-zinc-400">
+                  {discountCalories ? 'Descontadas de tu meta' : 'No descontadas'}
+                </span>
+              </div>
+            </div>
+
+            {/* Tip de vinculación */}
+            <div className="p-3.5 bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+              <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <div className="flex-1 space-y-1">
+                <p className="font-bold">¿Cómo activar la sincronización automática con Xiaomi Mi Fitness?</p>
+                <p className="text-[11px] leading-relaxed text-amber-800/90 dark:text-amber-300/90">
+                  En tu móvil: Abre <strong>Mi Fitness</strong> &gt; Toca en <strong>Perfil</strong> (abajo a la derecha) &gt; Selecciona <strong>"Datos y Privacidad"</strong> o <strong>"Aplicaciones conectadas"</strong> &gt; Activa la casilla de <strong>Google Fit</strong> o <strong>Health Connect</strong>. ¡También puedes vincular directo con Strava!
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Tab 1: Google Fit */}
         {activeIntegrationTab === 'google_fit' && (
@@ -1047,6 +1251,18 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
           </div>
         )}
       </div>
+
+      {/* Xiaomi & Smartband Calibration Modal */}
+      <XiaomiWatchModal
+        isOpen={isXiaomiModalOpen}
+        onClose={() => setIsXiaomiModalOpen(false)}
+        selectedDate={selectedDate}
+        currentSteps={totalSteps}
+        currentCalories={syncedCalories}
+        profile={profile}
+        currentDeviceModel={currentDayLog.deviceModel}
+        onSaveCalibration={handleSaveCalibration}
+      />
     </div>
   );
 };

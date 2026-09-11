@@ -13,12 +13,22 @@ export interface StravaAuthConfig {
 
 export function getStoredStravaConfig(): StravaAuthConfig {
   try {
-    const raw = localStorage.getItem(STRAVA_STORAGE_KEY);
-    if (raw) {
-      return JSON.parse(raw);
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(STRAVA_STORAGE_KEY) : null;
+    if (raw && raw !== 'undefined' && raw !== 'null') {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          clientId: parsed.clientId || '153892',
+          clientSecret: parsed.clientSecret || '',
+          accessToken: parsed.accessToken || null,
+          refreshToken: parsed.refreshToken || null,
+          expiresAt: parsed.expiresAt || null,
+          athleteName: parsed.athleteName || null,
+        };
+      }
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('Error reading stored Strava config:', err);
   }
   return {
     clientId: '153892', // Default Strava Application Client ID or configurable
@@ -33,12 +43,24 @@ export function getStoredStravaConfig(): StravaAuthConfig {
 export function saveStravaConfig(config: Partial<StravaAuthConfig>) {
   const current = getStoredStravaConfig();
   const updated = { ...current, ...config };
-  localStorage.setItem(STRAVA_STORAGE_KEY, JSON.stringify(updated));
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STRAVA_STORAGE_KEY, JSON.stringify(updated));
+    }
+  } catch (err) {
+    console.warn('Error saving Strava config:', err);
+  }
   return updated;
 }
 
 export function disconnectStrava() {
-  localStorage.removeItem(STRAVA_STORAGE_KEY);
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(STRAVA_STORAGE_KEY);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 /**

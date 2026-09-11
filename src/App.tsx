@@ -39,7 +39,8 @@ import {
   ProgressPhotoEntry,
   SubscriptionTier,
   ActivityDayLog,
-  WorkoutItem
+  WorkoutItem,
+  ConnectedActivityService
 } from './types';
 import { 
   getTodayString, 
@@ -855,9 +856,11 @@ export default function App() {
 
   const handleUpdateSyncData = (
     date: string,
-    service: 'google_fit' | null,
+    service: ConnectedActivityService,
     steps: number,
-    calories: number
+    calories: number,
+    deviceModel?: string,
+    isCalibratedManually?: boolean
   ) => {
     if (!session) return;
     setActivityLogs((prev) => {
@@ -873,6 +876,9 @@ export default function App() {
         connectedService: service,
         syncedSteps: steps,
         syncedCalories: calories,
+        deviceModel: deviceModel ?? day.deviceModel,
+        isCalibratedManually: isCalibratedManually ?? day.isCalibratedManually,
+        lastSyncedAt: new Date().toISOString(),
       };
       const updatedLogs = { ...prev, [date]: updatedDay };
       saveActivityLogsForUser(session.email, updatedLogs);

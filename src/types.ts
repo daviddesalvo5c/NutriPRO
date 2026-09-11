@@ -184,11 +184,21 @@ export interface WorkoutItem {
   date: string; // YYYY-MM-DD
 }
 
+export type ConnectedActivityService = 
+  | 'google_fit' 
+  | 'strava' 
+  | 'health_connect' 
+  | 'xiaomi_watch' 
+  | 'manual_watch' 
+  | null;
+
 export interface ActivityDayLog {
   date: string; // YYYY-MM-DD
-  connectedService: 'google_fit' | 'strava' | 'health_connect' | null;
+  connectedService: ConnectedActivityService;
   syncedSteps: number;
   syncedCalories: number;
+  deviceModel?: string;
+  isCalibratedManually?: boolean;
   lastSyncedAt?: string;
   workouts: WorkoutItem[];
 }
