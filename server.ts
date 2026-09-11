@@ -1506,15 +1506,32 @@ Responde ÚNICAMENTE en formato JSON con la siguiente estructura:
 const DEFAULT_STRAVA_CLIENT_ID = '278644';
 const DEFAULT_STRAVA_CLIENT_SECRET = '2b34bc09174ce8ca3d159e60b4b1f17e691b7da2';
 
-// 1. URL to initiate Strava OAuth popup
+// 1. URL to initiate Strava OAuth
 app.get('/api/strava/auth-url', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   const customClientId = (req.query.clientId as string) || process.env.STRAVA_CLIENT_ID || DEFAULT_STRAVA_CLIENT_ID;
   const host = req.get('host') || 'localhost:3000';
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-  const defaultRedirect = `${protocol}://${host}/api/strava/callback`;
-  const redirectUri = (req.query.redirectUri as string) || defaultRedirect;
+  
+  // The official domain registered by the user in Strava API Settings
+  const authorizedStravaDomain = 'ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app';
+  
+  // If running on cloud run or dev, ensure redirect_uri uses the authorized callback domain
+  let callbackDomain = host;
+  if (host.includes('.run.app')) {
+    callbackDomain = authorizedStravaDomain;
+  }
+  
+  const callbackProtocol = host.includes('localhost') || host.includes('127.0.0.1') ? protocol : 'https';
+  const redirectUri = `${callbackProtocol}://${callbackDomain}/api/strava/callback`;
   const scope = (req.query.scope as string) || 'read,activity:read_all';
+  
+  // State holds the return origin where the user started the flow (e.g. mobile or shared app)
+  const callerOrigin = (req.query.origin as string) || `${protocol}://${host}`;
+  const stateData = JSON.stringify({
+    returnOrigin: callerOrigin,
+    timestamp: Date.now()
+  });
 
   const params = new URLSearchParams({
     client_id: customClientId,
@@ -1522,6 +1539,7 @@ app.get('/api/strava/auth-url', (req, res) => {
     redirect_uri: redirectUri,
     approval_prompt: 'auto',
     scope: scope,
+    state: stateData
   });
 
   const authUrl = `https://www.strava.com/oauth/authorize?${params.toString()}`;
@@ -1529,28 +1547,46 @@ app.get('/api/strava/auth-url', (req, res) => {
     success: true, 
     url: authUrl, 
     clientId: customClientId, 
-    redirectUri 
+    redirectUri,
+    authorizedDomain: authorizedStravaDomain
   });
 });
 
-// 2. Strava OAuth Callback (Handles postMessage to iframe parent window)
+// 2. Strava OAuth Callback (Handles postMessage for desktop and direct redirect for mobile)
 app.get(['/api/strava/callback', '/api/strava/callback/', '/auth/strava/callback', '/auth/strava/callback/'], async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
+
+  let returnOrigin = '';
+  if (state) {
+    try {
+      const parsedState = JSON.parse(String(state));
+      if (parsedState?.returnOrigin) {
+        returnOrigin = parsedState.returnOrigin;
+      }
+    } catch {
+      returnOrigin = String(state);
+    }
+  }
 
   if (error) {
     return res.send(`
       <!DOCTYPE html>
       <html>
-        <head><title>Strava Auth</title></head>
-        <body style="font-family: system-ui, sans-serif; text-align: center; padding: 40px; background: #09090b; color: #fff;">
-          <h2 style="color: #f87171;">Autorización cancelada</h2>
-          <p style="color: #a1a1aa;">${String(error)}</p>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Strava Auth</title>
+        </head>
+        <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 30px; background: #09090b; color: #fff;">
+          <div style="max-width: 380px; margin: 20px auto; background: #18181b; padding: 24px; border-radius: 20px; border: 1px solid #27272a;">
+            <div style="font-size: 36px; margin-bottom: 12px;">⚠️</div>
+            <h2 style="color: #f87171; font-size: 18px; margin: 0 0 8px 0;">Autorización no completada</h2>
+            <p style="color: #a1a1aa; font-size: 13px; margin-bottom: 20px;">${String(error)}</p>
+            <a href="${returnOrigin || '/'}" style="display: inline-block; background: #27272a; color: white; padding: 10px 20px; border-radius: 12px; font-weight: bold; text-decoration: none; font-size: 13px;">Volver a NutriFit</a>
+          </div>
           <script>
             if (window.opener) {
               window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', service: 'strava', error: '${String(error)}' }, '*');
               setTimeout(() => window.close(), 1000);
-            } else {
-              window.location.href = '/';
             }
           </script>
         </body>
@@ -1562,15 +1598,20 @@ app.get(['/api/strava/callback', '/api/strava/callback/', '/auth/strava/callback
     return res.send(`
       <!DOCTYPE html>
       <html>
-        <head><title>Strava Auth</title></head>
-        <body style="font-family: system-ui, sans-serif; text-align: center; padding: 40px; background: #09090b; color: #fff;">
-          <h2 style="color: #f87171;">Falta código de autorización</h2>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Strava Auth</title>
+        </head>
+        <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 30px; background: #09090b; color: #fff;">
+          <div style="max-width: 380px; margin: 20px auto; background: #18181b; padding: 24px; border-radius: 20px; border: 1px solid #27272a;">
+            <div style="font-size: 36px; margin-bottom: 12px;">⚠️</div>
+            <h2 style="color: #f87171; font-size: 18px; margin: 0 0 8px 0;">Falta código de autorización</h2>
+            <a href="${returnOrigin || '/'}" style="display: inline-block; background: #27272a; color: white; padding: 10px 20px; border-radius: 12px; font-weight: bold; text-decoration: none; font-size: 13px;">Volver a NutriFit</a>
+          </div>
           <script>
             if (window.opener) {
               window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', service: 'strava', error: 'No se recibió código de Strava' }, '*');
               setTimeout(() => window.close(), 1200);
-            } else {
-              window.location.href = '/';
             }
           </script>
         </body>
@@ -1616,28 +1657,85 @@ app.get(['/api/strava/callback', '/api/strava/callback/', '/auth/strava/callback
     }
   }
 
+  const athleteName = authPayload.athlete
+    ? `${authPayload.athlete.firstname || ''} ${authPayload.athlete.lastname || ''}`.trim()
+    : 'David (Strava)';
+
   return res.send(`
     <!DOCTYPE html>
     <html>
-      <head><title>Strava Conectado</title></head>
-      <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 40px; background: #09090b; color: #f4f4f5;">
-        <div style="max-width: 380px; margin: 0 auto; background: #18181b; padding: 24px; border-radius: 16px; border: 1px solid #27272a;">
-          <div style="font-size: 36px; margin-bottom: 12px;">🚴</div>
-          <h3 style="margin: 0 0 8px 0; color: #f97316;">¡Strava Conectado con Éxito!</h3>
-          <p style="font-size: 13px; color: #a1a1aa; margin: 0 0 16px 0;">Sincronizando entrenamientos con tu diario NutriFit...</p>
-          <div style="font-size: 11px; color: #71717a;">Esta ventana se cerrará automáticamente.</div>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Strava Conectado</title>
+      </head>
+      <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 24px; background: #09090b; color: #f4f4f5;">
+        <div style="max-width: 380px; margin: 20px auto; background: #18181b; padding: 28px 24px; border-radius: 24px; border: 1px solid #27272a; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
+          <div style="font-size: 42px; margin-bottom: 12px;">🚴</div>
+          <h3 style="margin: 0 0 8px 0; color: #f97316; font-size: 20px; font-weight: 800;">¡Strava Conectado!</h3>
+          <p style="font-size: 13px; color: #a1a1aa; margin: 0 0 20px 0; line-height: 1.5;">Tu cuenta de <strong>${athleteName}</strong> quedó vinculada. Volviendo a tu diario NutriFit...</p>
+          <a id="btn-return" href="/" style="display: inline-block; background: #ea580c; color: white; padding: 12px 24px; border-radius: 14px; font-weight: 800; text-decoration: none; font-size: 14px; transition: opacity 0.2s;">
+            Volver a la App NutriFit
+          </a>
         </div>
         <script>
           const payload = ${JSON.stringify(authPayload)};
-          if (window.opener) {
-            window.opener.postMessage({
-              type: 'OAUTH_AUTH_SUCCESS',
-              service: 'strava',
-              data: payload
-            }, '*');
-            setTimeout(() => window.close(), 700);
-          } else {
-            setTimeout(() => { window.location.href = '/'; }, 1200);
+          const athlete = ${JSON.stringify(athleteName)};
+
+          // 1. Guardar en localStorage de este dominio
+          try {
+            const key = 'nutrifit_strava_auth_v1';
+            const stored = {
+              clientId: '${cid}',
+              accessToken: payload.accessToken,
+              refreshToken: payload.refreshToken,
+              expiresAt: payload.expiresAt,
+              athleteName: athlete,
+            };
+            localStorage.setItem(key, JSON.stringify(stored));
+            localStorage.setItem('nutrifit_active_activity_tab', 'strava');
+          } catch(e) {
+            console.warn('LocalStorage error:', e);
+          }
+
+          // 2. Resolver URL de retorno
+          let targetOrigin = ${JSON.stringify(returnOrigin)};
+          if (!targetOrigin || targetOrigin === 'null' || targetOrigin === 'undefined') {
+            targetOrigin = window.location.origin;
+          }
+
+          const query = new URLSearchParams({
+            strava_connected: '1',
+            st_token: payload.accessToken || '',
+            st_refresh: payload.refreshToken || '',
+            st_expires: String(payload.expiresAt || ''),
+            st_athlete: athlete
+          }).toString();
+
+          const finalReturnUrl = targetOrigin + '/?' + query;
+          const btn = document.getElementById('btn-return');
+          if (btn) btn.href = finalReturnUrl;
+
+          // 3. Notificar a ventana padre si es un popup en escritorio
+          let notifiedOpener = false;
+          if (window.opener && !window.opener.closed) {
+            try {
+              window.opener.postMessage({
+                type: 'OAUTH_AUTH_SUCCESS',
+                service: 'strava',
+                data: payload
+              }, '*');
+              notifiedOpener = true;
+              setTimeout(() => window.close(), 700);
+            } catch(e) {
+              console.warn('postMessage error:', e);
+            }
+          }
+
+          // 4. Si es móvil o no hay ventana emergente abierta, redirigir automáticamente
+          if (!notifiedOpener) {
+            setTimeout(() => {
+              window.location.href = finalReturnUrl;
+            }, 600);
           }
         </script>
       </body>

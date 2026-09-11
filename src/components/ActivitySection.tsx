@@ -114,8 +114,49 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     return localStorage.getItem('nutrifit_health_connect_active') === 'true';
   });
 
-  // Listen for OAuth messages from popup window
+  // Listen for OAuth messages from popup window & handle mobile redirect return
   useEffect(() => {
+    // 1. Check URL parameters for return from mobile OAuth redirect
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const isStravaConnectedParam = params.get('strava_connected') === '1';
+      const stToken = params.get('st_token');
+
+      if (isStravaConnectedParam || stToken) {
+        const token = stToken || '';
+        const refresh = params.get('st_refresh') || '';
+        const expires = params.get('st_expires') || '';
+        const athlete = params.get('st_athlete') || '';
+
+        if (token) {
+          const updated = saveStravaConfig({
+            clientId: '278644',
+            accessToken: token,
+            refreshToken: refresh,
+            expiresAt: Number(expires) || (Math.floor(Date.now() / 1000) + 21600),
+            athleteName: athlete ? decodeURIComponent(athlete) : 'David (Strava)',
+          });
+          setStravaConfig(updated);
+          setActiveIntegrationTab('strava');
+          notificationService.notifySuccess('¡Strava vinculado con éxito en tu móvil!');
+          handleSyncStrava(token);
+        } else {
+          const stored = getStoredStravaConfig();
+          if (stored.accessToken) {
+            setStravaConfig(stored);
+            setActiveIntegrationTab('strava');
+            notificationService.notifySuccess('¡Strava conectado con éxito!');
+            handleSyncStrava(stored.accessToken);
+          }
+        }
+
+        // Clean up URL query parameters without reloading
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    }
+
+    // 2. Message listener for desktop popups
     const handleOAuthMessage = (event: MessageEvent) => {
       const origin = event.origin;
       // Allow AI Studio preview, deployed domains, or localhost
@@ -216,13 +257,13 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     }
   };
 
-  // Strava popup-based OAuth flow (mandated by OAuth integration guidelines)
+  // Strava OAuth flow (popup on desktop, direct navigation on mobile)
   const handleConnectStrava = async () => {
     setIsSyncing(true);
     try {
-      const redirectUri = `${window.location.origin}/api/strava/callback`;
+      const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
       const res = await fetch(
-        `/api/strava/auth-url?clientId=${encodeURIComponent(stravaConfig.clientId || '153892')}&redirectUri=${encodeURIComponent(redirectUri)}`
+        `/api/strava/auth-url?clientId=${encodeURIComponent(stravaConfig.clientId || '278644')}&origin=${encodeURIComponent(currentOrigin)}`
       );
 
       let authUrl = '';
@@ -234,24 +275,40 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
       }
 
       if (!authUrl) {
-        authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(stravaConfig.clientId || '153892')}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&approval_prompt=auto&scope=read,activity:read_all`;
+        const authorizedStravaDomain = 'ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app';
+        const callbackUrl = `https://${authorizedStravaDomain}/api/strava/callback`;
+        const statePayload = JSON.stringify({ returnOrigin: currentOrigin, timestamp: Date.now() });
+        authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(stravaConfig.clientId || '278644')}&response_type=code&redirect_uri=${encodeURIComponent(callbackUrl)}&approval_prompt=auto&scope=read,activity:read_all&state=${encodeURIComponent(statePayload)}`;
       }
 
-      // Open OAuth provider directly in popup window
+      // Check if user is on a mobile device
+      const isMobileDevice = typeof navigator !== 'undefined' && 
+        (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || window.innerWidth < 768);
+
+      if (isMobileDevice) {
+        // Direct redirection on mobile eliminates popup blocker errors
+        window.location.href = authUrl;
+        return;
+      }
+
+      // Desktop: Open OAuth provider in popup window
       const popup = window.open(
         authUrl,
         'strava_oauth_popup',
         'width=600,height=720,status=no,toolbar=no,menubar=no'
       );
 
-      if (!popup) {
-        // If popup was blocked by browser, trigger direct connection
-        console.warn('Popup blocked, falling back to direct exchange');
-        await handleDirectConnectStrava();
+      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+        // If popup was blocked by browser, redirect directly
+        window.location.href = authUrl;
       }
     } catch (err: any) {
-      console.warn('Error starting Strava OAuth popup:', err);
-      await handleDirectConnectStrava();
+      console.warn('Error starting Strava OAuth:', err);
+      // Direct redirect fallback
+      const authorizedStravaDomain = 'ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app';
+      const callbackUrl = `https://${authorizedStravaDomain}/api/strava/callback`;
+      const statePayload = JSON.stringify({ returnOrigin: window.location.origin, timestamp: Date.now() });
+      window.location.href = `https://www.strava.com/oauth/authorize?client_id=278644&response_type=code&redirect_uri=${encodeURIComponent(callbackUrl)}&approval_prompt=auto&scope=read,activity:read_all&state=${encodeURIComponent(statePayload)}`;
     }
   };
 
@@ -1141,21 +1198,21 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
 
                   <div className="bg-zinc-50 dark:bg-zinc-800/60 p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-700 text-xs space-y-2.5">
                     <div>
-                      <span className="font-bold text-zinc-700 dark:text-zinc-200 block mb-0.5">
-                        1. Authorization Callback Domain:
-                      </span>
-                      <code className="text-orange-600 dark:text-orange-400 bg-white dark:bg-zinc-900 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 block select-all break-all">
-                        {typeof window !== 'undefined' ? window.location.hostname : 'localhost'}
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="font-bold text-zinc-700 dark:text-zinc-200">
+                          1. Dominio autorizado en Strava:
+                        </span>
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md">
+                          Configurado ✓
+                        </span>
+                      </div>
+                      <code className="text-orange-600 dark:text-orange-400 bg-white dark:bg-zinc-900 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 block select-all break-all font-mono text-[11px]">
+                        ais-dev-muijxp7okoy3l6e6e2eqhm-103481937290.us-east1.run.app
                       </code>
                     </div>
 
-                    <div>
-                      <span className="font-bold text-zinc-700 dark:text-zinc-200 block mb-0.5">
-                        2. Callback URL exacta:
-                      </span>
-                      <code className="text-orange-600 dark:text-orange-400 bg-white dark:bg-zinc-900 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 block select-all break-all">
-                        {typeof window !== 'undefined' ? `${window.location.origin}/api/strava/callback` : '/api/strava/callback'}
-                      </code>
+                    <div className="p-2.5 rounded-xl bg-orange-50 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-900/40 text-[11px] text-orange-800 dark:text-orange-300">
+                      📱 <strong>Optimizado para Móviles:</strong> Al pulsar <em>Vincular con Strava</em>, tu navegador móvil abrirá la autorización oficial sin bloqueos de popups y regresará automáticamente a NutriFit.
                     </div>
 
                     <a

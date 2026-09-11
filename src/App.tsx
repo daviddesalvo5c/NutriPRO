@@ -249,6 +249,16 @@ export default function App() {
     };
   }, []);
 
+  // Handle return from Strava OAuth redirect on mobile
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const search = window.location.search;
+      if (search.includes('strava_connected=1') || search.includes('st_token')) {
+        setActiveTab('activity');
+      }
+    }
+  }, []);
+
   // Whenever session changes, reload that user's private data & connect automatic Realtime sync
   useEffect(() => {
     if (!session) return;
