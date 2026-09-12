@@ -294,7 +294,7 @@ export const XiaomiWatchModal: React.FC<XiaomiWatchModalProps> = ({
                   <li>Toca en la pestaña inferior <strong>Perfil</strong> (abajo a la derecha).</li>
                   <li>Selecciona <strong>"Datos y Privacidad"</strong> o <strong>"Aplicaciones conectadas"</strong>.</li>
                   <li>
-                    Activa la conexión con <strong>Health Connect (Conexión de Salud)</strong> o <strong>Google Fit</strong>, habilitando el permiso de <em>Pasos</em> y <em>Calorías activas</em>.
+                    Activa la conexión con <strong>Health Connect (Conexión de Salud de Android)</strong>, habilitando los permisos de <em>Pasos</em> y <em>Calorías activas</em>.
                   </li>
                   <li>
                     <em>Alternativa veloz:</em> También puedes conectar Mi Fitness con <strong>Strava</strong> en un clic desde esa misma pantalla.

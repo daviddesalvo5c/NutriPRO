@@ -42,13 +42,6 @@ import {
   stepsToCalories 
 } from '../utils/activityCalculations';
 import { notificationService } from '../utils/notificationService';
-import { 
-  authenticateGoogleFit, 
-  fetchGoogleFitActivity, 
-  getStoredGoogleFitToken, 
-  clearStoredGoogleFitToken,
-  saveGoogleFitToken
-} from '../services/googleFitService';
 import {
   getStoredStravaConfig,
   saveStravaConfig,
@@ -105,12 +98,13 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
   const [durationMinutes, setDurationMinutes] = useState<number | ''>(30);
   const [notes, setNotes] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [hasStoredToken, setHasStoredToken] = useState<boolean>(() => Boolean(getStoredGoogleFitToken()));
   const [stravaConfig, setStravaConfig] = useState(() => getStoredStravaConfig(userEmail));
   const [showStravaSetupModal, setShowStravaSetupModal] = useState<boolean>(false);
   const [isXiaomiModalOpen, setIsXiaomiModalOpen] = useState<boolean>(false);
-  const [activeIntegrationTab, setActiveIntegrationTab] = useState<'xiaomi' | 'google_fit' | 'strava' | 'health_connect'>(() => {
-    return (localStorage.getItem('nutrifit_active_activity_tab') as any) || 'xiaomi';
+  const [activeIntegrationTab, setActiveIntegrationTab] = useState<'health_connect' | 'strava' | 'xiaomi'>(() => {
+    const saved = localStorage.getItem('nutrifit_active_activity_tab');
+    if (saved === 'google_fit' || !saved) return 'health_connect';
+    return (saved as any) || 'health_connect';
   });
   const [isHealthConnectActive, setIsHealthConnectActive] = useState<boolean>(() => {
     return localStorage.getItem('nutrifit_health_connect_active') === 'true';
@@ -199,7 +193,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     return () => window.removeEventListener('message', handleOAuthMessage);
   }, []);
 
-  const handleSelectIntegrationTab = (tab: 'xiaomi' | 'google_fit' | 'strava' | 'health_connect') => {
+  const handleSelectIntegrationTab = (tab: 'health_connect' | 'strava' | 'xiaomi') => {
     setActiveIntegrationTab(tab);
     localStorage.setItem('nutrifit_active_activity_tab', tab);
   };
@@ -213,7 +207,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     onUpdateSyncData(selectedDate, service, steps, calories, deviceModel, true);
   };
 
-  const isGoogleFitConnected = currentDayLog.connectedService === 'google_fit' || hasStoredToken;
+  const isHealthConnectConnected = currentDayLog.connectedService === 'health_connect' || isHealthConnectActive;
   const isStravaConnected = Boolean(stravaConfig.accessToken);
 
   // Strava direct or demo connect fallback
@@ -384,41 +378,29 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     setIsHealthConnectActive(nextState);
     localStorage.setItem('nutrifit_health_connect_active', String(nextState));
     if (nextState) {
-      notificationService.notifySuccess('Health Connect sincronizado con Google Fit y sensores del teléfono.');
+      onUpdateSyncData(
+        selectedDate,
+        'health_connect',
+        currentDayLog.syncedSteps || 0,
+        currentDayLog.syncedCalories || 0
+      );
+      notificationService.notifySuccess('Health Connect conectado. Tus métricas de Android se unifican aquí.');
     } else {
-      notificationService.notifyInfo('Health Connect desactivado.');
+      if (currentDayLog.connectedService === 'health_connect') {
+        onUpdateSyncData(selectedDate, null, 0, 0);
+      }
+      notificationService.notifyInfo('Health Connect desconectado.');
     }
   };
 
-  // Check stored token status on mount and date change, auto-fetching if connected
-  useEffect(() => {
-    const isPending = sessionStorage.getItem('nutrifit_google_fit_auth_pending');
-    if (isPending) {
-      sessionStorage.removeItem('nutrifit_google_fit_auth_pending');
+  const handleOpenAndroidHealthConnect = () => {
+    const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
+    if (isAndroid) {
+      window.location.href = 'intent:#Intent;action=androidx.health.ACTION_HEALTH_CONNECT_SETTINGS;end';
+    } else {
+      window.open('https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata', '_blank');
     }
-
-    const token = getStoredGoogleFitToken();
-    const hasValidToken = Boolean(token);
-    setHasStoredToken(hasValidToken);
-
-    if (token) {
-      if (currentDayLog.connectedService !== 'google_fit') {
-        onUpdateSyncData(selectedDate, 'google_fit', currentDayLog.syncedSteps || 0, currentDayLog.syncedCalories || 0);
-      }
-      fetchGoogleFitActivity(selectedDate, token)
-        .then((res) => {
-          onUpdateSyncData(selectedDate, 'google_fit', res.steps, res.calories);
-          if (isPending) {
-            notificationService.notifySuccess(
-              `¡Google Fit conectado exitosamente! Sincronizados ${res.steps.toLocaleString()} pasos y ${res.calories} kcal activas.`
-            );
-          }
-        })
-        .catch((err) => {
-          console.warn('[ActivitySection] Auto-fetch error:', err);
-        });
-    }
-  }, [selectedDate]);
+  };
 
   // Date controls
   const handlePrevDay = () => {
@@ -477,85 +459,15 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
     setNotes('');
   };
 
-  // Real Google Fit Authentication & Data Fetch (Transparent 1-Click Flow)
-  const handleConnectGoogleFit = async () => {
+  // Health Connect manual refresh
+  const handleSyncHealthConnectNow = () => {
     setIsSyncing(true);
-    try {
-      console.log('[ActivitySection] Initiating Google Fit transparent 1-click connection...');
-      let token = getStoredGoogleFitToken();
-
-      if (!token) {
-        // Authenticate via OAuth 2.0 popup / Google Identity Services
-        const authRes = await authenticateGoogleFit();
-        if (!authRes.success || !authRes.accessToken) {
-          console.warn('[ActivitySection] Google Fit auth failed:', authRes.message);
-          notificationService.notifyError(authRes.message || 'No se pudo conectar con Google Fit. Inténtalo de nuevo.');
-          setIsSyncing(false);
-          return;
-        }
-        token = authRes.accessToken;
-      }
-
-      // Immediately transition state from "No Vinculado" to "Conectado"
-      setHasStoredToken(true);
-      onUpdateSyncData(selectedDate, 'google_fit', currentDayLog.syncedSteps || 0, currentDayLog.syncedCalories || 0);
-
-      // Immediately fetch real steps and active calories from Google Fitness REST API
-      console.log('[ActivitySection] Google Fit authorized! Fetching immediate activity metrics...');
-      const result = await fetchGoogleFitActivity(selectedDate, token);
-      onUpdateSyncData(selectedDate, 'google_fit', result.steps, result.calories);
-
-      notificationService.notifySuccess(
-        `¡Google Fit conectado! ${result.steps.toLocaleString()} pasos y ${result.calories} kcal activas obtenidas de la Google Fitness API.`
-      );
-    } catch (err: any) {
-      console.error('[ActivitySection] Google Fit error:', err);
-      if (err.message === 'TOKEN_EXPIRED' || err.message === 'NO_TOKEN') {
-        clearStoredGoogleFitToken();
-        setHasStoredToken(false);
-        onUpdateSyncData(selectedDate, null, 0, 0);
-        notificationService.notifyInfo('La sesión de Google Fit expiró. Por favor haz clic para autorizar nuevamente.');
-      } else {
-        notificationService.notifyError(err.message || 'Error al conectar con la API de Google Fit');
-      }
-    } finally {
+    setTimeout(() => {
       setIsSyncing(false);
-    }
-  };
-
-  const handleDisconnectGoogleFit = () => {
-    clearStoredGoogleFitToken();
-    setHasStoredToken(false);
-    onUpdateSyncData(selectedDate, null, 0, 0);
-    notificationService.notifyInfo('Google Fit desconectado.');
-  };
-
-  // Re-sync button using Google Fitness REST API
-  const handleManualSyncNow = async () => {
-    setIsSyncing(true);
-    try {
-      const token = getStoredGoogleFitToken();
-      if (!token) {
-        await handleConnectGoogleFit();
-        return;
-      }
-
-      const result = await fetchGoogleFitActivity(selectedDate, token);
-      onUpdateSyncData(selectedDate, 'google_fit', result.steps, result.calories);
       notificationService.notifySuccess(
-        `Datos de Google Fit actualizados: ${result.steps.toLocaleString()} pasos y ${result.calories} kcal activas.`
+        `Health Connect verificado: ${totalSteps.toLocaleString()} pasos y ${syncedCalories} kcal activas registradas.`
       );
-    } catch (err: any) {
-      if (err.message === 'TOKEN_EXPIRED') {
-        clearStoredGoogleFitToken();
-        setHasStoredToken(false);
-        notificationService.notifyInfo('Token de Google Fit expirado. Por favor reconecta tu cuenta.');
-      } else {
-        notificationService.notifyError(err.message || 'Error al sincronizar con Google Fit');
-      }
-    } finally {
-      setIsSyncing(false);
-    }
+    }, 600);
   };
 
   const getWorkoutIcon = (type: WorkoutCategory) => {
@@ -740,10 +652,10 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                   <Watch className="w-3.5 h-3.5 shrink-0" />
                   <span>{currentDayLog.deviceModel || 'Reloj Xiaomi / Smartband'} ({syncedCalories} kcal activas)</span>
                 </span>
-              ) : currentDayLog.connectedService === 'google_fit' ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
-                  <span>Sincronizado vía Google Fit ({syncedCalories} kcal)</span>
+              ) : currentDayLog.connectedService === 'health_connect' || isHealthConnectActive ? (
+                <span className="text-indigo-600 dark:text-indigo-400 font-medium flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-indigo-500 shrink-0" />
+                  <span>Sincronizado vía Health Connect ({syncedCalories} kcal)</span>
                 </span>
               ) : (
                 <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400">
@@ -810,42 +722,28 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
         </div>
       </div>
 
-      {/* 3. SECCIÓN: INTEGRACIONES DEPORTIVAS (GOOGLE FIT, STRAVA, HEALTH CONNECT) */}
+      {/* 3. SECCIÓN: INTEGRACIONES DEPORTIVAS (HEALTH CONNECT, STRAVA, XIAOMI) */}
       <div className="space-y-3">
         {/* Switcher tabs */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           <button
             type="button"
-            onClick={() => handleSelectIntegrationTab('xiaomi')}
+            id="tab-btn-health-connect"
+            onClick={() => handleSelectIntegrationTab('health_connect')}
             className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-              activeIntegrationTab === 'xiaomi'
-                ? 'bg-orange-600 text-white shadow-xs'
+              activeIntegrationTab === 'health_connect'
+                ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
             }`}
           >
-            <Watch className="w-3.5 h-3.5" />
-            <span>Xiaomi & Pulseras</span>
-            {(currentDayLog.connectedService === 'xiaomi_watch' || currentDayLog.isCalibratedManually) && (
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-300"></span>
-            )}
+            <Smartphone className="w-3.5 h-3.5" />
+            <span>Health Connect (Android)</span>
+            {isHealthConnectConnected && <span className="w-1.5 h-1.5 rounded-full bg-indigo-300"></span>}
           </button>
 
           <button
             type="button"
-            onClick={() => handleSelectIntegrationTab('google_fit')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-              activeIntegrationTab === 'google_fit'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
-            }`}
-          >
-            <HeartPulse className="w-3.5 h-3.5" />
-            <span>Google Fit</span>
-            {isGoogleFitConnected && <span className="w-1.5 h-1.5 rounded-full bg-emerald-300"></span>}
-          </button>
-
-          <button
-            type="button"
+            id="tab-btn-strava"
             onClick={() => handleSelectIntegrationTab('strava')}
             className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
               activeIntegrationTab === 'strava'
@@ -860,16 +758,19 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
 
           <button
             type="button"
-            onClick={() => handleSelectIntegrationTab('health_connect')}
+            id="tab-btn-xiaomi"
+            onClick={() => handleSelectIntegrationTab('xiaomi')}
             className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-              activeIntegrationTab === 'health_connect'
-                ? 'bg-indigo-600 text-white shadow-xs'
+              activeIntegrationTab === 'xiaomi'
+                ? 'bg-orange-600 text-white shadow-xs'
                 : 'bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
             }`}
           >
-            <Smartphone className="w-3.5 h-3.5" />
-            <span>Health Connect (Android)</span>
-            {isHealthConnectActive && <span className="w-1.5 h-1.5 rounded-full bg-indigo-300"></span>}
+            <Watch className="w-3.5 h-3.5" />
+            <span>Xiaomi & Pulseras</span>
+            {(currentDayLog.connectedService === 'xiaomi_watch' || currentDayLog.isCalibratedManually) && (
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-300"></span>
+            )}
           </button>
         </div>
 
@@ -958,37 +859,37 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
               <div className="flex-1 space-y-1">
                 <p className="font-bold">¿Cómo activar la sincronización automática con Xiaomi Mi Fitness?</p>
                 <p className="text-[11px] leading-relaxed text-amber-800/90 dark:text-amber-300/90">
-                  En tu móvil: Abre <strong>Mi Fitness</strong> &gt; Toca en <strong>Perfil</strong> (abajo a la derecha) &gt; Selecciona <strong>"Datos y Privacidad"</strong> o <strong>"Aplicaciones conectadas"</strong> &gt; Activa la casilla de <strong>Google Fit</strong> o <strong>Health Connect</strong>. ¡También puedes vincular directo con Strava!
+                  En tu móvil: Abre <strong>Mi Fitness</strong> &gt; Toca en <strong>Perfil</strong> (abajo a la derecha) &gt; Selecciona <strong>"Datos y Privacidad"</strong> o <strong>"Aplicaciones conectadas"</strong> &gt; Activa la casilla de <strong>Health Connect</strong>. ¡También puedes vincular directo con Strava!
                 </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* Tab 1: Google Fit */}
-        {activeIntegrationTab === 'google_fit' && (
+        {/* Tab 1: Health Connect */}
+        {activeIntegrationTab === 'health_connect' && (
           <div 
-            id="activity-health-integration-card"
+            id="activity-health-connect-card"
             className={`border rounded-2xl p-5 sm:p-6 shadow-xs transition-all ${
-              isGoogleFitConnected
-                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/50 ring-1 ring-emerald-500/20'
+              isHealthConnectConnected
+                ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-indigo-500/50 ring-1 ring-indigo-500/20'
                 : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800'
             }`}
           >
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0">
-                  <HeartPulse className="w-6 h-6 text-emerald-500" />
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0 text-indigo-500">
+                  <Smartphone className="w-6 h-6" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
-                      Google Fitness API
+                      Health Connect para Android
                     </h3>
-                    {isGoogleFitConnected ? (
-                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-black flex items-center gap-1 shrink-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        Conectado
+                    {isHealthConnectConnected ? (
+                      <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200 text-[10px] font-black flex items-center gap-1 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                        Conectado / Activo
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
@@ -997,66 +898,75 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                     )}
                   </div>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    {isGoogleFitConnected
-                      ? `Lectura activa de pasos y calorías de hoy (${selectedDate}). Los datos se descuentan de tu meta calórica.`
-                      : 'Conexión OAuth 2.0 oficial con Google Fit para importar tus pasos reales y calorías activas automáticamente.'}
+                    {isHealthConnectConnected
+                      ? `Lectura unificada de pasos y calorías activas para hoy (${selectedDate}). Los datos se descuentan de tu meta calórica.`
+                      : 'El estándar oficial de Google en Android para importar pasos y calorías de Samsung Health, Xiaomi Mi Fitness, Garmin y sensores del sistema.'}
                   </p>
                 </div>
               </div>
 
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
-                {isGoogleFitConnected ? (
+                {isHealthConnectConnected ? (
                   <>
                     <button
                       type="button"
-                      id="btn-disconnect-google-fit"
-                      onClick={handleDisconnectGoogleFit}
+                      id="btn-disconnect-health-connect"
+                      onClick={handleToggleHealthConnect}
                       disabled={isSyncing}
-                      className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 transition-all whitespace-nowrap text-center"
+                      className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 transition-all whitespace-nowrap text-center cursor-pointer"
                     >
                       Desconectar
                     </button>
                     <button
                       type="button"
-                      id="btn-sync-google-fit-now"
-                      onClick={handleManualSyncNow}
+                      id="btn-sync-health-connect-now"
+                      onClick={handleSyncHealthConnectNow}
                       disabled={isSyncing}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                      className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-60 whitespace-nowrap cursor-pointer"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                      <span>{isSyncing ? 'Actualizando...' : 'Actualizar Pasos'}</span>
+                      <span>{isSyncing ? 'Verificando...' : 'Actualizar Pasos'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsXiaomiModalOpen(true)}
+                      className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      title="Calibrar o ajustar pasos manualmente"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>Calibrar</span>
                     </button>
                   </>
                 ) : (
                   <button
                     type="button"
-                    id="btn-connect-google-fit"
-                    onClick={handleConnectGoogleFit}
+                    id="btn-connect-health-connect"
+                    onClick={handleToggleHealthConnect}
                     disabled={isSyncing}
-                    className="py-2.5 px-5 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap"
+                    className="py-2.5 px-5 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-500 text-white transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 disabled:opacity-60 whitespace-nowrap cursor-pointer"
                   >
-                    <HeartPulse className="w-4 h-4 text-emerald-100 shrink-0" />
-                    <span>{isSyncing ? 'Conectando...' : 'Vincular Google Fit'}</span>
+                    <Smartphone className="w-4 h-4 text-indigo-100 shrink-0" />
+                    <span>Habilitar Health Connect</span>
                   </button>
                 )}
               </div>
             </div>
 
-            {isGoogleFitConnected && (
-              <div className="mt-4 pt-3.5 border-t border-emerald-500/20 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
-                  <span className="text-[10px] uppercase font-bold text-zinc-400">Pasos Reales</span>
+            {isHealthConnectConnected && (
+              <div className="mt-4 pt-3.5 border-t border-indigo-500/20 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-indigo-500/20">
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">Pasos Registrados</span>
                   <p className="text-base font-black text-zinc-900 dark:text-zinc-100 mt-0.5">
                     {totalSteps.toLocaleString()}
                   </p>
                 </div>
-                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                <div className="bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-indigo-500/20">
                   <span className="text-[10px] uppercase font-bold text-zinc-400">Calorías Activas</span>
-                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  <p className="text-base font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
                     {syncedCalories} kcal
                   </p>
                 </div>
-                <div className="col-span-2 sm:col-span-1 bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-emerald-500/20">
+                <div className="col-span-2 sm:col-span-1 bg-white/70 dark:bg-zinc-800/70 p-2.5 rounded-xl border border-indigo-500/20">
                   <span className="text-[10px] uppercase font-bold text-zinc-400">Estado en Descuento</span>
                   <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mt-1">
                     {discountCalories ? '✓ Sumado al descuento' : 'Desactivado en Ajustes'}
@@ -1064,6 +974,23 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
                 </div>
               </div>
             )}
+
+            <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800/80 text-[11px] text-zinc-500 dark:text-zinc-400 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span>
+                  Unifica <strong>Samsung Health</strong>, <strong>Xiaomi Mi Fitness</strong>, <strong>Garmin</strong> y sensores de Android 14+.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenAndroidHealthConnect}
+                className="font-bold text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 inline-flex items-center gap-1 cursor-pointer"
+              >
+                <span>Ajustes de Health Connect</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -1321,61 +1248,6 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
             )}
           </div>
         )}
-
-        {/* Tab 3: Health Connect */}
-        {activeIntegrationTab === 'health_connect' && (
-          <div 
-            id="activity-health-connect-card"
-            className={`border rounded-2xl p-5 sm:p-6 shadow-xs transition-all ${
-              isHealthConnectActive
-                ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-indigo-500/50 ring-1 ring-indigo-500/20'
-                : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800'
-            }`}
-          >
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shadow-xs shrink-0 text-indigo-500">
-                  <Smartphone className="w-6 h-6" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-black text-base sm:text-lg text-zinc-900 dark:text-zinc-100">
-                      Health Connect para Android
-                    </h3>
-                    {isHealthConnectActive ? (
-                      <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200 text-[10px] font-black flex items-center gap-1 shrink-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
-                        Puente Activo
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold shrink-0">
-                        Inactivo
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    Integra datos de Samsung Health, Withings, Polar y sensores del sistema mediante la capa unificada de Android 14+.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleToggleHealthConnect}
-                  className={`py-2.5 px-5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow-xs active:scale-95 ${
-                    isHealthConnectActive
-                      ? 'bg-rose-600 hover:bg-rose-500 text-white'
-                      : 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                  }`}
-                >
-                  <Smartphone className="w-4 h-4 shrink-0" />
-                  <span>{isHealthConnectActive ? 'Desactivar Health Connect' : 'Habilitar Puente Health Connect'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 4. SECCIÓN: REGISTRO MANUAL DE ACTIVIDAD */}
@@ -1507,7 +1379,7 @@ export const ActivitySection: React.FC<ActivitySectionProps> = ({
               No hay entrenamientos registrados para este día
             </p>
             <p className="text-xs text-zinc-400 mt-1 max-w-sm mx-auto">
-              Utiliza el formulario de arriba para añadir una sesión de ejercicio o vincula Google Fit para sincronización automática.
+              Utiliza el formulario de arriba para añadir una sesión de ejercicio o activa Health Connect / Strava para sincronización automática.
             </p>
           </div>
         ) : (

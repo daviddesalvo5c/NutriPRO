@@ -185,7 +185,6 @@ export interface WorkoutItem {
 }
 
 export type ConnectedActivityService = 
-  | 'google_fit' 
   | 'strava' 
   | 'health_connect' 
   | 'xiaomi_watch' 
